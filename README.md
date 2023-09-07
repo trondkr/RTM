@@ -4,71 +4,50 @@
 ![CodeBeat][image-2]
 ![CodeCov][image-3]
 
-### CMIP6 models available for calculating light that has all of the required variables
-The files needed to run the light calculations can be created using the script `CMIP6_light.py` by setting teh configuration to:
+## Preparing the forcing for the RTM
+### Extract variables and interpolate to cartesian grid
+Before you can run the Radiative Transfer Model you need to create the required files used as forcing. The model takes 11 variables as input which is interpolated values from CMIP6 models. You can create these forcing files using the script `CMIP6_light.py` and by setting the configuration to (`CMIP6_config.py`):
 
 ```
-self.use_esmf_v801 = True
 self.use_local_CMIP6_files = False
 self.write_CMIP6_to_file = True
 self.perform_light_calculations = False
 ```
 This will extract the required variables (11) necessary for each CMIP6 model and ensemble member (e.g., r1i1p1f1) 
-and climate scenario (e.g. SSP245) specified. For this paper we use the following combinations.
+and climate scenario (e.g. SSP245, SSP585) specified. For this paper we use the following combinations.
+```
+CMCC-ESM2: ["r1i1p1f1","r1i1p2f1"]
+CanESM5: ["r1i1p2f1","r2i1p2f1","r9i1p2f1","r10i1p2f1","r7i1p2f1"]
+MPI-ESM1-2-LR: ["r10i1p1f1","r1i1p1f1","r4i1p1f1","r2i1p1f1"]
+UKESM1-0-LL: ["r1i1p1f2","r2i1p1f2","r3i1p1f2","r4i1p1f2","r8i1p1f2"]
+MPI-ESM1-2-HR: ["r1i1p1f1","r2i1p1f1"]
+```
+For each model, scenario, ensemble member, and variable we extract the data defined by the latitudinal and longitudinal boundaries defined in the configuration:
+```
+self.min_lat = 60
+self.max_lat = 85
+self.min_lon = 0
+self.max_lon = 360
+```
 
-+--------------------------------+--------------------------------+----------------------------------------------------+
-|             Model              |             Member             |                      Variable                      |
-+================================+================================+====================================================+
-|            CanESM5             |            r1i1p1f1            |                        tos                         |
-+--------------------------------+--------------------------------+----------------------------------------------------+
-|            CanESM5             |           r10i1p1f1            |                        tos                         |
-+--------------------------------+--------------------------------+----------------------------------------------------+
-|            CanESM5             |            r4i1p1f1            |                        tos                         |
-+--------------------------------+--------------------------------+----------------------------------------------------+
-|            CanESM5             |           r10i1p2f1            |                        tos                         |
-+--------------------------------+--------------------------------+----------------------------------------------------+
-|            CanESM5             |            r3i1p2f1            |                        tos                         |
-+--------------------------------+--------------------------------+----------------------------------------------------+
-|            CanESM5             |            r2i1p1f1            |                        tos                         |
-+--------------------------------+--------------------------------+----------------------------------------------------+
-|         MPI-ESM1-2-HR          |            r1i1p1f1            |                        tos                         |
-+--------------------------------+--------------------------------+----------------------------------------------------+
-|         MPI-ESM1-2-HR          |            r2i1p1f1            |                        tos                         |
-+--------------------------------+--------------------------------+----------------------------------------------------+
+Once you have run all of the combinations the forcing files will be ready. The files are automatically stored on Google Cloud storage (you have to define your own setup for this with permissions to upload to your own buckets).
 
-- MPI-ESM1-2-LR
-    - r2i1p1f1
-    - r4i1p1f1
-    - r10i1p1f1 
-- MPI-ESM1-2-HR
-    - r2i1p1f1
-- ACCESS-ESM1-5
-    - r1i1p1f1
-    - r4i1p1f1
-    - r2i1p1f1
-    - r10i1p1f1
-    
-- CanESM5
-    - r1i1p1f1
-    - r1i1p2f1
-- UKESM1-0-LL
-    - r1i1p1f2
-  
-# Note to run without disconnecting 
+## Running the RTM
+### Note to run without disconnecting 
 The code was run on Google VM instances which can occassionally dicsonnect to the SSH VScode window. To avoid disrupting
 the run of the program when this happens run teh script using `nohup`:
 `nohup /home/sam/miniconda3/envs/actea-3.9/bin/python CMIP6_light.py > output.txt &`
 
-# Calculate ocean surface albedo (OSA).
+### Calculate ocean surface albedo (OSA).
 Here we use the approach by Seferian et al. 2018 to spectrally calculate the albedo at each 
 grid point accounting for solar angle, wind/waves and chlorophyll. The output provides OSA for 
 direct and diffuse light for wavelengths 200-4000 nm. The OSA is then split into UV and VIS components 
 based on wavelengths to be used in function `calculate_radiation`.
 
-# Calculate irradiance
+### Calculate irradiance
 Using the output from OSA we can estimate the 
 
-# Total irradiance calculations
+### Total irradiance calculations
 It is possible to add more accurate models for extra terrestrial light using various models when 
 calculating the following:
 ```python
@@ -94,6 +73,8 @@ To reference the use of pvlib for light calculations use:
 Holmgren, W., C. Hansen and M. Mikofski (2018). “pvlib Python: A python package for modeling solar energy systems.” 
 Journal of Open Source Software 3(29): 884.
 
+### Unittests
+Several unittests exists to verify that the functions provide the expected results. These are all written as `pytest` and can be run simply as: `pytest`.
 ### Useful links
 http://www.matteodefelice.name/post/aggregating-gridded-data/
 https://cds.climate.copernicus.eu/toolbox/doc/index.html
@@ -101,8 +82,7 @@ https://www.toptal.com/python/an-introduction-to-mocking-in-python
 https://esmtools.readthedocs.io/en/latest/examples/pco2.html
 earthsystemmodeling.org/esmf\_releases/last\_built/esmpy\_doc/html/examples.html
 https://github.com/Quick/Nimble#truthiness
-
-\#
+https://csdms.colorado.edu/w/images/CICE_documentation_and_software_user's_manual.pdf
 
 [image-1]:	https://badge.buildkite.com/998b597662a8db957ab524d2660958105de691cc0bc1753594.svg
 [image-2]:	https://codebeat.co/badges/8bf4f052-6579-47fa-a552-b221154549c0

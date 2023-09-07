@@ -1,15 +1,9 @@
+import logging
 import sys
 from typing import Tuple
-
 import numpy as np
-import logging
-
-import CMIP6_albedo_plot
-import CMIP6_config
-
-# Local files and utility functions
-sys.path.append("./subroutines/")
-
+import xarray as xr
+from CMIP6_config import Config_albedo
 
 # Class for calculating albedo of sea-ice, snow and snow-ponds
 # The albedo and absorbed/transmitted flux parameterizations for
@@ -20,7 +14,7 @@ class CMIP6_CCSM3():
 
     def __init__(self) -> None:
 
-        self.config = CMIP6_config.Config_albedo()
+        self.config = Config_albedo()
         self.config.setup_parameters()
         self.chl_abs_A, self.chl_abs_B, self.chl_abs_wavelength = self.config.setup_absorption_chl()
         self.o3_abs, self.o3_wavelength = self.config.setup_ozone_uv_spectrum()
@@ -77,32 +71,37 @@ class CMIP6_CCSM3():
 
         # bare ice, thickness dependence
         fh = np.where((np.arctan(ice_thickness * 4.0) / fhtan) >= 1.0, 1.0, np.arctan(ice_thickness * 4.0) / fhtan)
-
+     
         albo_dr = np.where(np.isnan(osa), albicev, osa)
         albo = albo_dr * (1.0 - fh)
+       
         albo_i = albicev * fh + albo
-        albo_dr = np.where(ice_thickness > 0, albo_i*ice_concentration, albo_dr)
+        albo_dr = np.where(ice_thickness > 0, albo_i, albo_dr)
 
-        # bare ice, temperature dependence (where snow is zero)
-        dTs = Timelt - air_temp
-        fT = np.nanmin(((dTs / dT_mlt) - 1), 0)
+        # bare ice, temperature dependence (where snow is zero). Affects albedo when
+        # temperature is between -1 and 0.
+        dTs = xr.where(air_temp > -1, 1.0, 0.0)
+        fT = -np.min(dTs/dT_mlt, 0)
 
-        albo_dr = np.where((ice_thickness > 0) & (snow_thickness < puny), (albicev - dalb_mlt * fT)*ice_concentration, albo_dr)
-        albo_dr = np.where(snow_thickness > 0.05, albsnowv* snow_concentration, albo_dr)
-
-
+        # Account for melting ponds (only if ice thicker than 0.1 m) and
+        # snow patches. Scale by ice and snow concentrations.
+        albo_dr = np.where((ice_thickness >= 0.1) & (snow_thickness < puny), (albo_i - dalb_mlt * fT)*ice_concentration, albo_dr)
+        albo_dr = np.where(snow_thickness > snowpatch, albsnowv* snow_concentration, albo_dr)
+        
         # Avoid very low values where melting too strong
-        albo_dr = np.where(albo_dr < 0.02, osa, albo_dr)
+        albo_dr = np.where(albo_dr < snowpatch, osa, albo_dr)
 
         # avoid negative albedo for thin, bare, melting ice
         albo_dr = np.where(albo_dr > 0, albo_dr, osa)
 
-        albo_dr = np.where(np.isnan(albo_dr), np.nanmean(osa), albo_dr)
-
-        return albo_dr
+        return np.where(np.isnan(albo_dr), np.nanmean(osa), albo_dr)
 
 
     def calc_snow_attenuation(self, dr, snow_thickness: np.ndarray):
+        """
+        Calculate attenuation from snow assuming a constant attenuation coefficient of 20 m-1
+        :param dr: Incoming solar radiation after accounting for atmospheric and surface albedo
+        """
         attenuation_snow = 20  # unit : m-1
 
         total_snow = np.count_nonzero(np.where(snow_thickness > 0))
@@ -113,7 +112,7 @@ class CMIP6_CCSM3():
     def calc_ice_attenuation(self, spectrum: str, dr: np.ndarray, ice_thickness: np.ndarray):
         """
         This method splits the total incoming UV or VIS light into its wavelength components defined by the
-        relative energy within each wavelength this is done by calculating teh total sum of all wavelengths within
+        relative energy within each wavelength this is done by calculating the total sum of all wavelengths within
         the spectrum bands and then dividing the wavelength fractions to the total.
 
         :param spectrum: UV or VIS
@@ -121,18 +120,18 @@ class CMIP6_CCSM3():
         :param ice_thickness: ice thickness on 2D array
         :return: Total irradiance after absorption through ice has been removed
         """
-        logging.info("[CMIP6_ccsm3] calc_ice_attenuation started for spectrum {}".format(spectrum))
+        logging.debug(f"[CMIP6_ccsm3] calc_ice_attenuation started for spectrum {spectrum}")
 
         if spectrum == "uv":
-            start_index = len(np.arange(200, 200, 10))
-            end_index = len(np.arange(200, 440, 10))
+            start_index = self.config.start_index_uv
+            end_index = self.config.end_index_uv
 
         elif spectrum == "vis":
-            start_index = len(np.arange(200, 400, 10))
-            end_index = len(np.arange(200, 710, 10))
+            start_index = self.config.start_index_visible
+            end_index = self.config.end_index_visible
 
         else:
-            raise Exception("[CMIP6_ccsm3] No valid spectrum defined ({})".format(spectrum))
+            raise Exception("f[CMIP6_ccsm3] No valid spectrum defined ({spectrum})")
 
         #   dr = dr[start_index:end_index, :, :]
         # Calculate the effect for individual wavelength bands
@@ -143,7 +142,7 @@ class CMIP6_CCSM3():
             dr_final[i, :, :] = np.squeeze(dr[i, :, :]) * np.exp(attenuation[i] * (-ice_thickness))
 
         total_ice = np.count_nonzero(np.where(ice_thickness > 0))
-        per = (total_ice / ice_thickness.size) * 100.
+      #  per = (total_ice / ice_thickness.size) * 100.
 
      #   logging.info("[CMIP6_ccsm3] Sea-ice attenuation ranges from {:3.3f} to {:3.3f}".format(np.nanmin(attenuation),
       #                                                                               np.nanmax(attenuation)))
@@ -210,8 +209,6 @@ class CMIP6_CCSM3():
         # of energy component in total energy.
         # is_ = ice-snow
 
-        plotter = CMIP6_albedo_plot.CMIP6_albedo_plot()
-
         # Effect of snow and ice
         # Albedo from snow and ice - direct where sea ice concentration is above zero
         sw_ice_ocean = (direct_sw + diffuse_sw)* (1.0 - osa)
@@ -222,17 +219,17 @@ class CMIP6_CCSM3():
                                             sw_ice_ocean)
 
         # The wavelength dependent effect of ice on attenuation
+      
         sw_attenuation_corrected_for_snow_and_ice = np.where(ice_thickness > 0,
                                            self.calc_ice_attenuation(spectrum, sw_attenuation_corrected_for_snow,
                                                                      ice_thickness),
                                            sw_attenuation_corrected_for_snow)
 
-
         if spectrum == "uv":
-            return sw_attenuation_corrected_for_snow
+            return sw_attenuation_corrected_for_snow_and_ice
 
         # Account for the chlorophyll abundance and effect on attenuation of visible light
-        return self.calculate_chl_attenuated_shortwave(sw_attenuation_corrected_for_snow, chl)
+        return self.calculate_chl_attenuated_shortwave(sw_attenuation_corrected_for_snow_and_ice, chl)
 
     def calculate_chl_attenuated_shortwave(self, dr: np.ndarray, chl: np.ndarray, depth: float = 0.1):
         """
@@ -259,9 +256,8 @@ class CMIP6_CCSM3():
         #      dr_wave[i, :, :] = dr[:, :] * (
         #                  self.config.fractions_shortwave_vis[i] / np.sum(self.config.fractions_shortwave_vis))
 
-        logging.info(
-            "[CMIP6_ccsm3] {} segments to integrate for effect of wavelength on attenuation by chl".format(
-                len(self.config.fractions_shortwave_vis)))
+        logging.debug(
+            f"[CMIP6_ccsm3] {len(self.config.fractions_shortwave_vis)} segments to integrate for effect of wavelength on attenuation by chl")
 
         # Convert the units of chlorophyll to mgm-3
         chl = chl * kg2mg

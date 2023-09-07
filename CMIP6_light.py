@@ -345,18 +345,15 @@ class CMIP6_light:
                 out_amon = re.regrid_variable(key,
                                               current_ds,
                                               ds_out_amon,
-                                              interpolation_method=self.config.interp,
-                                              use_esmf_v801=self.config.use_esmf_v801).to_dataset()
+                                              interpolation_method=self.config.interp).to_dataset()
 
                 out = re.regrid_variable(key, out_amon, ds_out,
-                                         interpolation_method=self.config.interp,
-                                         use_esmf_v801=self.config.use_esmf_v801)
+                                         interpolation_method=self.config.interp)
 
             else:
                 out = re.regrid_variable(key, current_ds,
                                          ds_out,
-                                         interpolation_method=self.config.interp,
-                                         use_esmf_v801=self.config.use_esmf_v801)
+                                         interpolation_method=self.config.interp)
             extracted[key] = out
         return extracted
 
@@ -500,8 +497,7 @@ class CMIP6_light:
 
         toz_ds = re.regrid_variable("TOZ", toz_full,
                                     ds_out,
-                                    interpolation_method=self.config.interp,
-                                    use_esmf_v801=self.config.use_esmf_v801)
+                                    interpolation_method=self.config.interp)
 
         return toz_ds
 
@@ -560,8 +556,7 @@ class CMIP6_light:
                     model_object.current_time = datetime.datetime(year=sel_time.year, month=sel_time.month,
                                                                   day=day + 1, hour=hour_of_day)
 
-                    logging.info("[CMIP6_light] Running for timestep {} model {}".format(model_object.current_time,
-                                                                                         model_object.name))
+                    logging.info(f"[CMIP6_light] Running {model_object.current_time} model {model_object.name} scenario {current_experiment_id}")
 
                     ctime, pv_system = self.setup_pv_system(model_object.current_time)
                     calc_zenith = [dask.delayed(self.calculate_zenith)(lat[j, 0], ctime) for j in range(m)]
@@ -627,19 +622,16 @@ class CMIP6_light:
                         if scenario == "normal":
                             is_albedo_dr_vis = np.where(direct_OSA < 0.08, 0.06, OSA_ice_ocean)
 
-                        logging.info("[CMIP6_light] GHI range {} to {}".format(np.nanmin(ghi), np.nanmax(ghi)))
+                        logging.debug(f"[CMIP6_light] GHI range {np.nanmin(ghi)} to {np.nanmax(ghi)}")
 
                         # Calculate shortwave radiation entering the ocean after accounting for the effect of snow
                         # and ice to the direct and diffuse albedos and for attenuation (no scattering).
                         # The final product adds diffuse and direct
                         # light for the spectrum in question (vis or uv).
-                        start_index_visible = len(np.arange(200, 400, 10))
-                        end_index_visible = len(np.arange(200, 710, 10))
-
                         sw_vis_attenuation_corrected_for_snow_ice_chl = self.cmip6_ccsm3.compute_surface_solar_for_specific_wavelength_band(
                             OSA_ice_ocean,
-                            direct_sw[start_index_visible:end_index_visible, :, :],
-                            diffuse_sw[start_index_visible:end_index_visible, :, :],
+                            direct_sw[self.config.start_index_visible:self.config.end_index_visible, :, :],
+                            diffuse_sw[self.config.start_index_visible:self.config.end_index_visible, :, :],
                             chl * chl_scale,
                             sisnthick,
                             sithick,
@@ -650,13 +642,10 @@ class CMIP6_light:
                             model_object,
                             spectrum="vis")
 
-                        start_index_uv = len(np.arange(200, 200, 10))
-                        end_index_uv = len(np.arange(200, 440, 10))
-
                         sw_uv_attenuation_corrected_for_snow_ice_chl = self.cmip6_ccsm3.compute_surface_solar_for_specific_wavelength_band(
                             OSA_ice_ocean,
-                            direct_sw[start_index_uv:end_index_uv, :, :],
-                            diffuse_sw[start_index_uv:end_index_uv, :, :],
+                            direct_sw[self.config.start_index_uv:self.config.end_index_uv, :, :],
+                            diffuse_sw[self.config.start_index_uv:self.config.end_index_uv, :, :],
                             chl * chl_scale,
                             sisnthick,
                             sithick,
@@ -666,39 +655,42 @@ class CMIP6_light:
                             lon, lat,
                             model_object,
                             spectrum="uv")
-                        # d
+                        # Integrate values across wavelengths according to which variable we are considering
                         par = np.squeeze(np.trapz(y=sw_vis_attenuation_corrected_for_snow_ice_chl,
-                                                  x=wavelengths[start_index_visible:end_index_visible], axis=0))
+                                                  x=wavelengths[self.config.start_index_visible:self.config.end_index_visible], axis=0))
                         uv = np.squeeze(np.trapz(y=sw_uv_attenuation_corrected_for_snow_ice_chl,
-                                                 x=wavelengths[start_index_uv:end_index_uv], axis=0))
+                                                 x=wavelengths[self.config.start_index_uv:self.config.end_index_uv], axis=0))
 
                         sw_srf = np.squeeze(np.trapz(y=direct_sw,
                                                      x=wavelengths, axis=0)) + \
                                  np.squeeze(np.trapz(y=diffuse_sw,
                                                      x=wavelengths, axis=0))
 
-                        uv_srf = np.squeeze(np.trapz(y=direct_sw[start_index_uv:end_index_uv],
-                                                     x=wavelengths[start_index_uv:end_index_uv], axis=0)) + \
-                                 np.squeeze(np.trapz(y=diffuse_sw[start_index_uv:end_index_uv],
-                                                     x=wavelengths[start_index_uv:end_index_uv], axis=0))
+                        uv_srf = np.squeeze(np.trapz(y=direct_sw[self.config.start_index_uv:self.config.end_index_uv],
+                                                     x=wavelengths[self.config.start_index_uv:self.config.end_index_uv], axis=0)) + \
+                                 np.squeeze(np.trapz(y=diffuse_sw[self.config.start_index_uv:self.config.end_index_uv],
+                                                     x=wavelengths[self.config.start_index_uv:self.config.end_index_uv], axis=0))
 
-                        start_index_uvb = len(np.arange(200, 280, 10))
-                        end_index_uvb = len(np.arange(200, 320, 10))
 
-                        uv_b = np.squeeze(np.trapz(y=diffuse_sw[start_index_uvb:end_index_uvb],
-                                                   x=wavelengths[start_index_uvb:end_index_uvb], axis=0)) + \
-                               np.squeeze(np.trapz(y=direct_sw[start_index_uvb:end_index_uvb],
-                                                   x=wavelengths[start_index_uvb:end_index_uvb], axis=0))
+                        uv_b = np.squeeze(np.trapz(y=diffuse_sw[self.config.start_index_uvb:self.config.end_index_uvb],
+                                                   x=wavelengths[self.config.start_index_uvb:self.config.end_index_uvb], axis=0)) + \
+                               np.squeeze(np.trapz(y=direct_sw[self.config.start_index_uvb:self.config.end_index_uvb],
+                                                   x=wavelengths[self.config.start_index_uvb:self.config.end_index_uvb], axis=0))
+                 
+                        uv_a = np.squeeze(np.trapz(y=diffuse_sw[self.config.start_index_uva:self.config.end_index_uva],
+                                                   x=wavelengths[self.config.start_index_uva:self.config.end_index_uva], axis=0)) + \
+                               np.squeeze(np.trapz(y=direct_sw[self.config.start_index_uva:self.config.end_index_uva],
+                                                   x=wavelengths[self.config.start_index_uva:self.config.end_index_uva], axis=0))
 
                         uvi = self.cmip6_ccsm3.calculate_uvi(sw_uv_attenuation_corrected_for_snow_ice_chl, ozone,
-                                                             wavelengths[start_index_uv:end_index_uv])
+                                                             wavelengths[self.config.start_index_uv:self.config.end_index_uv])
 
                         do_plot = False
                         if do_plot:
                             plotter = CMIP6_albedo_plot.CMIP6_albedo_plot()
 
                             plotter.create_plots(lon, lat, model_object,
-                                                 direct_sw=dr_par,
+                                                 direct_sw=par,
                                                  plotname_postfix="_vis_{}".format(scenario))
 
                             plotter.create_plots(lon, lat, model_object,
@@ -729,9 +721,9 @@ class CMIP6_light:
                                                  OSA_VIS=OSA_ice_ocean,
                                                  plotname_postfix="_OSA_BROADBAND_{}".format(scenario))
 
-                        for data_list, vari in zip([par, sw_srf, ghi, uv_b, uv, uv_srf, uvi,
+                        for data_list, vari in zip([par, sw_srf, ghi, uv_b, uv_a, uv, uv_srf, uvi,
                                                     OSA_ice_ocean],
-                                                   ["par", "sw_srf", "ghi", "uvb", "uv", "uv_srf", "uvi",
+                                                   ["par", "sw_srf", "ghi", "uvb", "uva", "uv", "uv_srf", "uvi",
                                                     "osa"]):
                             
                             filename = self.get_filename(vari, model_object.name, 
@@ -744,7 +736,7 @@ class CMIP6_light:
                         time_counter += 1
 
         # Upload fimnal results to GCS
-        for vari in ["par", "sw_srf", "ghi", "uvb", "uv", "uv_srf", "uvi", "osa"]:
+        for vari in ["par", "sw_srf", "ghi", "uvb", "uva", "uv", "uv_srf", "uvi", "osa"]:
             filename = self.get_filename(vari, model_object.name, 
                                         model_object.current_member_id,
                                         scenario,current_experiment_id)
@@ -754,7 +746,7 @@ class CMIP6_light:
     def get_filename(self, vari, model_name, member_id,scenario,current_experiment_id):
         """ Create the filename depending on scenario, member_id, and experiment_id 
         """
-        out = self.config.outdir + "ncfiles"
+        out = f"{self.config.outdir}/ncfiles/{current_experiment_id}"
         if not os.path.exists(out): os.makedirs(out, exist_ok=True)
         return f"{out}/{vari}_{model_name}_{member_id}_{self.config.start_date}-{self.config.end_date}_scenario_{scenario}_{current_experiment_id}.nc"
                                                             

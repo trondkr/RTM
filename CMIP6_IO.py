@@ -67,7 +67,7 @@ class CMIP6_IO:
         md5 = self.calculate_md5_sha(f"{fname}")
         blob = self.bucket.blob(fname)
         blob.md5_hash = md5
-      #  blob.upload_from_filename(fname)
+        blob.upload_from_filename(fname)
         self.logger.info(f"[CMIP6_IO] Finished uploading to : {fname}")
 
 
@@ -398,17 +398,14 @@ class CMIP6_IO:
                 out_amon = re.regrid_variable(key,
                                               ds_trans,
                                               ds_out_amon,
-                                              interpolation_method=config.interp,
-                                              use_esmf_v801=config.use_esmf_v801) #.to_dataset()
+                                              interpolation_method=config.interp) #.to_dataset()
 
                 out = re.regrid_variable(key, out_amon, ds_out,
-                                         interpolation_method=config.interp,
-                                         use_esmf_v801=config.use_esmf_v801)
+                                         interpolation_method=config.interp)
             else:
                 out = re.regrid_variable(key, ds_trans,
                                          ds_out,
-                                         interpolation_method=config.interp,
-                                         use_esmf_v801=config.use_esmf_v801)
+                                         interpolation_method=config.interp)
             
             if config.write_CMIP6_to_file:
                 out_dir = "{}/{}/{}".format(config.cmip6_outdir, current_experiment_id, model_obj.name)
