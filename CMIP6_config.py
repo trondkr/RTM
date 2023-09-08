@@ -1,4 +1,5 @@
 import logging
+
 import gcsfs
 import numpy as np
 import pandas as pd
@@ -8,6 +9,7 @@ class Config_albedo:
     """
     Class that is passed to the CMIP6 calculations containing the configuration.
     """
+
     def __init__(self):
         """
         This function initialized the configuration for the CMIP6 calculations.
@@ -17,7 +19,7 @@ class Config_albedo:
         self.fs = gcsfs.GCSFileSystem(token="anon", access="read_only")
         self.grid_labels = ["gn"]  # Can be gr=grid rotated, or gn=grid native
 
-        self.member_ids = ["r1i1p1f1","r1i1p2f1"]
+        self.member_ids = ["r1i1p1f2", "r2i1p1f2", "r3i1p1f2", "r4i1p1f2", "r8i1p1f2"]
         # FOR RTM we are using:
         # "CMCC-ESM2": ["r1i1p1f1","r1i1p2f1"]
         # "CanESM5":  ["r1i1p2f1","r2i1p2f1","r9i1p2f1","r10i1p2f1","r7i1p2f1"]
@@ -26,9 +28,7 @@ class Config_albedo:
         # "MPI-ESM1-2-HR": ["r1i1p1f1","r2i1p1f1"]
 
         self.experiment_ids = ["ssp245", "ssp585"]
-        self.source_ids = [
-            "CMCC-ESM2"
-        ]
+        self.source_ids = ["UKESM1-0-LL"]
         self.variable_ids = [
             "prw",
             "clt",
@@ -88,8 +88,8 @@ class Config_albedo:
         self.outdir = "light"
         self.selected_depth = 0
         self.models = {}
-        
-        # Define the range of wavelengths that constitue the different parts of the spectrum. 
+
+        # Define the range of wavelengths that constitue the different parts of the spectrum.
         self.start_index_uv = len(np.arange(200, 200, 10))
         self.end_index_uv = len(np.arange(200, 410, 10))
         self.start_index_uvb = len(np.arange(200, 280, 10))
@@ -100,7 +100,7 @@ class Config_albedo:
         self.end_index_visible = len(np.arange(200, 710, 10))
         self.start_index_nir = len(np.arange(200, 800, 10))
         self.end_index_nir = len(np.arange(200, 2500, 10))
-        
+
         self.setup_erythema_action_spectrum()
 
     def setup_logging(self):
@@ -123,12 +123,16 @@ class Config_albedo:
         self.beta_w = wl["b_w(λ)"].values
         self.alpha_wc = wl["a_wc(λ)"].values
         self.solar_energy = wl["E(λ)"].values
-      
-        self.fractions_shortwave_uv = self.solar_energy[self.start_index_uv:self.end_index_uv]
-        self.fractions_shortwave_vis = self.solar_energy[
-            self.start_index_visible:self.end_index_visible
+
+        self.fractions_shortwave_uv = self.solar_energy[
+            self.start_index_uv : self.end_index_uv
         ]
-        self.fractions_shortwave_nir = self.solar_energy[self.start_index_nir:self.end_index_nir]
+        self.fractions_shortwave_vis = self.solar_energy[
+            self.start_index_visible : self.end_index_visible
+        ]
+        self.fractions_shortwave_nir = self.solar_energy[
+            self.start_index_nir : self.end_index_nir
+        ]
 
         logging.info(
             "[CMIP6_config] Energy fraction UV ({} to {}): {:3.3f}".format(
@@ -205,7 +209,7 @@ class Config_albedo:
         logging.info(
             "[CMIP6_config] Calculated erythema action spectrum for wavelengths 290-400 at 10 nm increment"
         )
-      
+
         return o3_abs_interp, wavelengths
 
     def setup_absorption_chl(self):
