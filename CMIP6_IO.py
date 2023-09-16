@@ -85,7 +85,7 @@ class CMIP6_IO:
         md5 = self.calculate_md5_sha(f"{fname}")
         blob = self.bucket.blob(fname)
         blob.md5_hash = md5
-        #  blob.upload_from_filename(fname)
+        blob.upload_from_filename(fname)
         self.logger.info(f"[CMIP6_IO] Finished uploading to : {fname}")
 
     def print_table_of_models_and_members(self):
@@ -121,71 +121,66 @@ class CMIP6_IO:
     def organize_cmip6_netcdf_files_into_datasets(
         self, config: CMIP6_config.Config_albedo, current_experiment_id
     ):
-        for source_id in config.source_ids:
-            if source_id in config.models.keys():
-                model_object = config.models[source_id]
-            else:
-                model_object = CMIP6_model.CMIP6_MODEL(name=source_id)
+        source_id = config.source_id
+        member_id = config.member_id
 
-            logging.info(
-                "[CMIP6_IO] Organizing NetCDF CMIP6 model object {}".format(
-                    model_object.name
-                )
+        if source_id in config.models.keys():
+            model_object = config.models[source_id]
+        else:
+            model_object = CMIP6_model.CMIP6_MODEL(name=source_id)
+
+        logging.info(
+            f"[CMIP6_IO] Organizing NetCDF CMIP6 model object {model_object.name} and id {member_id}"
+        )
+
+        for variable_id in config.variable_ids:
+            netcdf_filename = self.format_netcdf_filename(
+                config.cmip6_netcdf_dir,
+                model_object.name,
+                config.member_id,
+                current_experiment_id,
+                variable_id,
             )
+            print(netcdf_filename)
+            if storage.Blob(bucket=self.bucket, name=netcdf_filename).exists(
+                self.storage_client
+            ):
+                ds = self.open_dataset_on_gs(netcdf_filename, decode_times=True)
+                # Extract the time period of interest
+                ds = ds.sel(
+                    time=slice(config.start_date, config.end_date),
+                    y=slice(config.min_lat, config.max_lat),
+                )
 
-            for member_id in config.member_ids:
-                for variable_id, table_id in zip(config.variable_ids, config.table_ids):
-                    netcdf_filename = self.format_netcdf_filename(
-                        config.cmip6_netcdf_dir,
-                        model_object.name,
-                        member_id,
-                        current_experiment_id,
+                logging.info(
+                    "[CMIP6_IO] {} => NetCDF: Extracted {} range from {} to {} for {}".format(
+                        source_id,
                         variable_id,
+                        ds["time"].values[0],
+                        ds["time"].values[-1],
+                        current_experiment_id,
                     )
-
-                    if storage.Blob(bucket=self.bucket, name=netcdf_filename).exists(
-                        self.storage_client
-                    ):
-                        ds = self.open_dataset_on_gs(netcdf_filename, decode_times=True)
-
-                        # Extract the time period of interest
-                        ds = ds.sel(
-                            time=slice(config.start_date, config.end_date),
-                            y=slice(config.min_lat, config.max_lat),
-                        )
-
-                        logging.info(
-                            "[CMIP6_IO] {} => NetCDF: Extracted {} range from {} to {} for {}".format(
-                                source_id,
-                                variable_id,
-                                ds["time"].values[0],
-                                ds["time"].values[-1],
-                                current_experiment_id,
-                            )
-                        )
-                        # Save the info to model object
-                        if not member_id in model_object.member_ids:
-                            model_object.member_ids.append(member_id)
-
-                        if not member_id in model_object.ocean_vars.keys():
-                            model_object.ocean_vars[member_id] = []
-                        if not variable_id in model_object.ocean_vars[member_id]:
-                            current_vars = model_object.ocean_vars[member_id]
-                            current_vars.append(variable_id)
-                            model_object.ocean_vars[member_id] = current_vars
-
-                        self.dataset_into_model_dictionary(
-                            member_id, variable_id, ds, model_object
-                        )
-                #  else:
-                #      logging.info("[CMIP6_IO] {} did not have member id {} - continue...".format(model_object.name,
-                #                                                                                  member_id))
-            self.models.append(model_object)
-            logging.info(
-                "[CMIP6_IO] Stored {} variables for model {}".format(
-                    len(model_object.ocean_vars), model_object.name
                 )
+                # Save the info to model object
+                if not member_id in model_object.member_ids:
+                    model_object.member_ids.append(member_id)
+
+                if not member_id in model_object.ocean_vars.keys():
+                    model_object.ocean_vars[member_id] = []
+                if not variable_id in model_object.ocean_vars[member_id]:
+                    current_vars = model_object.ocean_vars[member_id]
+                    current_vars.append(variable_id)
+                    model_object.ocean_vars[member_id] = current_vars
+
+                self.dataset_into_model_dictionary(
+                    config.member_id, variable_id, ds, model_object
+                )
+        self.models.append(model_object)
+        logging.info(
+            "[CMIP6_IO] Stored {} variables for model {}".format(
+                len(model_object.ocean_vars), model_object.name
             )
+        )
 
     def to_360day_monthly(self, ds: xr.Dataset):
         """Change the calendar to datetime and precision to monthly."""
@@ -209,171 +204,163 @@ class CMIP6_IO:
     ):
         # for experiment_id in config.experiment_ids:
         for grid_label in config.grid_labels:
-            for source_id in config.source_ids:
-                if source_id in config.models.keys():
-                    model_object = config.models[source_id]
-                else:
-                    model_object = CMIP6_model.CMIP6_MODEL(name=source_id)
+            if config.source_id in config.models.keys():
+                model_object = config.models[config.source_id]
+            else:
+                model_object = CMIP6_model.CMIP6_MODEL(name=config.source_id)
 
-                logging.info(
-                    "[CMIP6_IO] Organizing CMIP6 model object {}".format(
-                        model_object.name
-                    )
+            logging.info(
+                "[CMIP6_IO] Organizing CMIP6 model object {}".format(model_object.name)
+            )
+
+            collection_of_variables = []
+            missing = []
+            for variable_id, table_id in zip(config.variable_ids, config.table_ids):
+                # Historical query string
+                query_string = "source_id=='{}'and table_id=='{}' and member_id=='{}' and grid_label=='{}' and experiment_id=='historical' and variable_id=='{}'".format(
+                    config.source_id,
+                    table_id,
+                    config.member_id,
+                    grid_label,
+                    variable_id,
                 )
 
-                for member_id in config.member_ids:
+                ds_hist = self.perform_cmip6_query(config, query_string)
+
+                # Future projection depending on choice in experiment_id
+                query_string = "source_id=='{}'and table_id=='{}' and member_id=='{}' and grid_label=='{}' and experiment_id=='{}' and variable_id=='{}'".format(
+                    config.source_id,
+                    table_id,
+                    config.member_id,
+                    grid_label,
+                    current_experiment_id,
+                    variable_id,
+                )
+                ds_proj = self.perform_cmip6_query(config, query_string)
+
+                if isinstance(ds_proj, xr.Dataset) and isinstance(ds_hist, xr.Dataset):
+                    # Concatenate the historical and projections datasets
+                    ds = xr.concat([ds_hist, ds_proj], dim="time")
+
+                    if not ds.indexes["time"].dtype in ["datetime64[ns]"]:
+                        start_date = datetime.fromisoformat(config.start_date)
+                        end_date = datetime.fromisoformat(config.end_date)
+                        ds = self.to_360day_monthly(ds)
+                    else:
+                        start_date = config.start_date
+                        end_date = config.end_date
+                    ds = xr.decode_cf(ds)
+                    logging.info(
+                        "[CMIP6_IO] Variable: {} and units {}".format(
+                            variable_id, ds[variable_id].units
+                        )
+                    )
+                    if variable_id in ["prw"]:
+                        # 1 kg of rain water spread over 1 square meter of surface is 1 mm in thickness
+                        # The pvlib functions takes cm so we convert values
+                        ds[variable_id].values = ds[variable_id].values / 10.0
+                        ds.attrs["units"] = "cm"
+                        logging.info(
+                            "[CMIP6_IO] Minimum {} and maximum {} values after converting to {} units".format(
+                                np.nanmin(ds[variable_id].values),
+                                np.nanmax(ds[variable_id].values),
+                                ds[variable_id].units,
+                            )
+                        )
+
+                    if variable_id in ["tas"]:
+                        if ds[variable_id].units in ["K", "Kelvin", "kelvin"]:
+                            ds[variable_id].values = ds[variable_id].values - 273.15
+                            ds.attrs["units"] = "C"
+                            logging.info(
+                                "[CMIP6_IO] Minimum {} and maximum {} values after converting to {} units".format(
+                                    np.nanmin(ds[variable_id].values),
+                                    np.nanmax(ds[variable_id].values),
+                                    ds[variable_id].units,
+                                )
+                            )
+
+                    # Remove the duplicate overlapping times (e.g. 2001-2014)
+                    _, index = np.unique(ds["time"], return_index=True)
+                    ds = ds.isel(time=index)
+                    # if not isinstance((ds.indexes["time"]), pd.DatetimeIndex):
+                    #     ds["time"] = ds.indexes["time"].to_datetimeindex()
+                    ds = ds.sel(time=slice(start_date, end_date))
+                    ds["time"] = pd.to_datetime(ds.indexes["time"])
+
+                    # Extract the time period of interest
+                    ds = ds.sel(time=slice(start_date, end_date))
+
+                    logging.info(
+                        "[CMIP6_IO] {} => Extracted {} range from {} to {} for member {}".format(
+                            config.source_id,
+                            variable_id,
+                            ds["time"].values[0],
+                            ds["time"].values[-1],
+                            config.member_id,
+                        )
+                    )
+
+                    # pass the pre-processing directly
+                    dset_processed = combined_preprocessing(ds)
+                    if variable_id in ["chl"]:
+                        if config.source_id in [
+                            "CESM2",
+                            "CESM2-FV2",
+                            "CESM2-WACCM-FV2",
+                        ]:
+                            dset_processed = dset_processed.isel(
+                                lev_partial=config.selected_depth
+                            )
+                        else:
+                            dset_processed = dset_processed.isel(
+                                lev=config.selected_depth
+                            )
+                    if variable_id in ["ph"]:
+                        logging.info(
+                            "[CMIP6_IO] => Extract only depth level {}".format(
+                                config.selected_depth
+                            )
+                        )
+                        dset_processed = dset_processed.isel(lev=config.selected_depth)
+                    collection_of_variables.append(variable_id)
+
+                    # Save the info to model object
+                    if not config.member_id in model_object.member_ids:
+                        model_object.member_ids.append(config.member_id)
+
+                    if not config.member_id in model_object.ocean_vars.keys():
+                        model_object.ocean_vars[config.member_id] = []
+                    if not variable_id in model_object.ocean_vars[config.member_id]:
+                        current_vars = model_object.ocean_vars[config.member_id]
+                        current_vars.append(variable_id)
+                        model_object.ocean_vars[config.member_id] = current_vars
+
+                    self.dataset_into_model_dictionary(
+                        config.member_id, variable_id, dset_processed, model_object
+                    )
+
+                if collection_of_variables != config.variable_ids:
+                    missing = [
+                        x
+                        for x in config.variable_ids
+                        if not x in collection_of_variables
+                        or collection_of_variables.remove(x)
+                    ]
+                    logging.error(
+                        f"[CMIP6_IO] Error - unable to find some variable {missing}"
+                    )
+                else:
+                    missing = []
+                if len(missing) == 0:
                     collection_of_variables = []
                     missing = []
-                    for variable_id, table_id in zip(
-                        config.variable_ids, config.table_ids
-                    ):
-                        # Historical query string
-                        query_string = "source_id=='{}'and table_id=='{}' and member_id=='{}' and grid_label=='{}' and experiment_id=='historical' and variable_id=='{}'".format(
-                            source_id, table_id, member_id, grid_label, variable_id
+                    self.models.append(model_object)
+                    logging.info(
+                        "[CMIP6_IO] Stored {} variables for model {}".format(
+                            len(model_object.ocean_vars), model_object.name
                         )
-
-                        ds_hist = self.perform_cmip6_query(config, query_string)
-
-                        # Future projection depending on choice in experiment_id
-                        query_string = "source_id=='{}'and table_id=='{}' and member_id=='{}' and grid_label=='{}' and experiment_id=='{}' and variable_id=='{}'".format(
-                            source_id,
-                            table_id,
-                            member_id,
-                            grid_label,
-                            current_experiment_id,
-                            variable_id,
-                        )
-                        ds_proj = self.perform_cmip6_query(config, query_string)
-
-                        if isinstance(ds_proj, xr.Dataset) and isinstance(
-                            ds_hist, xr.Dataset
-                        ):
-                            # Concatenate the historical and projections datasets
-                            ds = xr.concat([ds_hist, ds_proj], dim="time")
-
-                            if not ds.indexes["time"].dtype in ["datetime64[ns]"]:
-                                start_date = datetime.fromisoformat(config.start_date)
-                                end_date = datetime.fromisoformat(config.end_date)
-                                ds = self.to_360day_monthly(ds)
-                            else:
-                                start_date = config.start_date
-                                end_date = config.end_date
-                            ds = xr.decode_cf(ds)
-                            logging.info(
-                                "[CMIP6_IO] Variable: {} and units {}".format(
-                                    variable_id, ds[variable_id].units
-                                )
-                            )
-                            if variable_id in ["prw"]:
-                                # 1 kg of rain water spread over 1 square meter of surface is 1 mm in thickness
-                                # The pvlib functions takes cm so we convert values
-                                ds[variable_id].values = ds[variable_id].values / 10.0
-                                ds.attrs["units"] = "cm"
-                                logging.info(
-                                    "[CMIP6_IO] Minimum {} and maximum {} values after converting to {} units".format(
-                                        np.nanmin(ds[variable_id].values),
-                                        np.nanmax(ds[variable_id].values),
-                                        ds[variable_id].units,
-                                    )
-                                )
-
-                            if variable_id in ["tas"]:
-                                if ds[variable_id].units in ["K", "Kelvin", "kelvin"]:
-                                    ds[variable_id].values = (
-                                        ds[variable_id].values - 273.15
-                                    )
-                                    ds.attrs["units"] = "C"
-                                    logging.info(
-                                        "[CMIP6_IO] Minimum {} and maximum {} values after converting to {} units".format(
-                                            np.nanmin(ds[variable_id].values),
-                                            np.nanmax(ds[variable_id].values),
-                                            ds[variable_id].units,
-                                        )
-                                    )
-
-                            # Remove the duplicate overlapping times (e.g. 2001-2014)
-                            _, index = np.unique(ds["time"], return_index=True)
-                            ds = ds.isel(time=index)
-                            # if not isinstance((ds.indexes["time"]), pd.DatetimeIndex):
-                            #     ds["time"] = ds.indexes["time"].to_datetimeindex()
-                            ds = ds.sel(time=slice(start_date, end_date))
-                            ds["time"] = pd.to_datetime(ds.indexes["time"])
-
-                            # Extract the time period of interest
-                            ds = ds.sel(time=slice(start_date, end_date))
-
-                            logging.info(
-                                "[CMIP6_IO] {} => Extracted {} range from {} to {} for member {}".format(
-                                    source_id,
-                                    variable_id,
-                                    ds["time"].values[0],
-                                    ds["time"].values[-1],
-                                    member_id,
-                                )
-                            )
-
-                            # pass the pre-processing directly
-                            dset_processed = combined_preprocessing(ds)
-                            if variable_id in ["chl"]:
-                                if source_id in [
-                                    "CESM2",
-                                    "CESM2-FV2",
-                                    "CESM2-WACCM-FV2",
-                                ]:
-                                    dset_processed = dset_processed.isel(
-                                        lev_partial=config.selected_depth
-                                    )
-                                else:
-                                    dset_processed = dset_processed.isel(
-                                        lev=config.selected_depth
-                                    )
-                            if variable_id in ["ph"]:
-                                logging.info(
-                                    "[CMIP6_IO] => Extract only depth level {}".format(
-                                        config.selected_depth
-                                    )
-                                )
-                                dset_processed = dset_processed.isel(
-                                    lev=config.selected_depth
-                                )
-                            collection_of_variables.append(variable_id)
-
-                            # Save the info to model object
-                            if not member_id in model_object.member_ids:
-                                model_object.member_ids.append(member_id)
-
-                            if not member_id in model_object.ocean_vars.keys():
-                                model_object.ocean_vars[member_id] = []
-                            if not variable_id in model_object.ocean_vars[member_id]:
-                                current_vars = model_object.ocean_vars[member_id]
-                                current_vars.append(variable_id)
-                                model_object.ocean_vars[member_id] = current_vars
-
-                            self.dataset_into_model_dictionary(
-                                member_id, variable_id, dset_processed, model_object
-                            )
-
-                    if collection_of_variables != config.variable_ids:
-                        missing = [
-                            x
-                            for x in config.variable_ids
-                            if not x in collection_of_variables
-                            or collection_of_variables.remove(x)
-                        ]
-                        logging.error(
-                            f"[CMIP6_IO] Error - unable to find some variable {missing}"
-                        )
-                    else:
-                        missing = []
-                    if len(missing) == 0:
-                        collection_of_variables = []
-                        missing = []
-                        self.models.append(model_object)
-                        logging.info(
-                            "[CMIP6_IO] Stored {} variables for model {}".format(
-                                len(model_object.ocean_vars), model_object.name
-                            )
-                        )
+                    )
 
     def dataset_into_model_dictionary(
         self,

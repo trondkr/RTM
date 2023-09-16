@@ -19,16 +19,17 @@ class Config_albedo:
         self.fs = gcsfs.GCSFileSystem(token="anon", access="read_only")
         self.grid_labels = ["gn"]  # Can be gr=grid rotated, or gn=grid native
 
-        self.member_ids = ["r1i1p1f2", "r2i1p1f2", "r3i1p1f2", "r4i1p1f2", "r8i1p1f2"]
         # FOR RTM we are using:
-        # "CMCC-ESM2": ["r1i1p1f1","r1i1p2f1"]
-        # "CanESM5":  ["r1i1p2f1","r2i1p2f1","r9i1p2f1","r10i1p2f1","r7i1p2f1"]
-        # "MPI-ESM1-2-LR": ["r10i1p1f1","r1i1p1f1","r4i1p1f1","r2i1p1f1"]
+        # "CMCC-ESM2": ["r1i1p2f1"] ok
+        # "CanESM5":  ["r1i1p2f1","r2i1p2f1","r9i1p2f1","r10i1p2f1","r7i1p2f1","r6i1p2f1","r3i1p2f1"]
+        # "MPI-ESM1-2-LR": ["r10i1p1f1","r1i1p1f1","r4i1p1f1","r2i1p1f1","r6i1p1f1"]
         # "UKESM1-0-LL": ["r1i1p1f2","r2i1p1f2","r3i1p1f2","r4i1p1f2","r8i1p1f2"]
         # "MPI-ESM1-2-HR": ["r1i1p1f1","r2i1p1f1"]
 
         self.experiment_ids = ["ssp245", "ssp585"]
-        self.source_ids = ["UKESM1-0-LL"]
+        self.source_id = None
+        self.member_id = None
+
         self.variable_ids = [
             "prw",
             "clt",

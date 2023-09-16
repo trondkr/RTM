@@ -1,6 +1,7 @@
 import datetime
 import logging
 import os
+from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser
 from calendar import monthrange
 from typing import Any, List
 
@@ -14,6 +15,7 @@ import pvlib
 import texttable
 import xarray as xr
 import xesmf as xe
+from dask.distributed import Client
 from google.cloud import storage
 
 import CMIP6_albedo_plot
@@ -26,9 +28,12 @@ import CMIP6_regrid
 
 
 class CMIP6_light:
-    def __init__(self):
+    def __init__(self, args):
         np.seterr(divide="ignore")
         self.config = CMIP6_config.Config_albedo()
+        self.config.source_id = args.source_id
+        self.config.member_id = args.member_id
+
         if not self.config.use_local_CMIP6_files:
             self.config.read_cmip6_repository()
         self.cmip6_models: List[Any] = []
@@ -513,73 +518,27 @@ class CMIP6_light:
         m = len(wind[:, 0])
         n = len(wind[0, :])
 
+        """
         table = texttable.Texttable()
         table.set_cols_align(["c", "c", "c"])
         table.set_cols_valign(["m", "m", "m"])
 
         table.header(["Model", "Variable", "Range"])
-        table.add_rows(
-            [
-                [
-                    "",
-                    "clt",
-                    "{:3.3f} to {:3.3f}.".format(np.nanmin(clt), np.nanmax(clt)),
-                ],
-                [
-                    "",
-                    "chl",
-                    "{:3.3f} to {:3.3f}.".format(np.nanmin(chl), np.nanmax(chl)),
-                ],
-                [
-                    "",
-                    "prw",
-                    "{:3.3f} to {:3.3f}.".format(np.nanmin(prw), np.nanmax(prw)),
-                ],
-                [
-                    "{}".format(model_object.name),
-                    "tas",
-                    "{:3.3f} to {:3.3f}.".format(np.nanmin(tas), np.nanmax(tas)),
-                ],
-                [
-                    "",
-                    "uas",
-                    "{:3.3f} to {:3.3f}.".format(np.nanmin(uas), np.nanmax(uas)),
-                ],
-                [
-                    "",
-                    "vas",
-                    "{:3.3f} to {:3.3f}.".format(np.nanmin(vas), np.nanmax(vas)),
-                ],
-                [
-                    "",
-                    "siconc",
-                    "{:3.3f} to {:3.3f}.".format(np.nanmin(siconc), np.nanmax(siconc)),
-                ],
-                [
-                    "",
-                    "sithick",
-                    "{:3.3f} to {:3.3f}.".format(
-                        np.nanmin(sithick), np.nanmax(sithick)
-                    ),
-                ],
-                [
-                    "",
-                    "sisnconc",
-                    "{:3.3f} to {:3.3f}.".format(
-                        np.nanmin(sisnconc), np.nanmax(sisnconc)
-                    ),
-                ],
-                [
-                    "",
-                    "sisnthick",
-                    "{:3.3f} to {:3.3f}.".format(
-                        np.nanmin(sisnthick), np.nanmax(sisnthick)
-                    ),
-                ],
-            ]
-        )
+        table.add_rows([
+            ["", "clt", "{:3.3f} to {:3.3f}.".format(np.nanmin(clt), np.nanmax(clt))],
+            ["", "chl", "{:3.3f} to {:3.3f}.".format(np.nanmin(chl), np.nanmax(chl))],
+            ["", "prw", "{:3.3f} to {:3.3f}.".format(np.nanmin(prw), np.nanmax(prw))],
+            ["{}".format(model_object.name), "tas", "{:3.3f} to {:3.3f}.".format(np.nanmin(tas), np.nanmax(tas))],
+            ["", "uas", "{:3.3f} to {:3.3f}.".format(np.nanmin(uas), np.nanmax(uas))],
+            ["", "vas", "{:3.3f} to {:3.3f}.".format(np.nanmin(vas), np.nanmax(vas))],
+            ["", "siconc", "{:3.3f} to {:3.3f}.".format(np.nanmin(siconc), np.nanmax(siconc))],
+            ["", "sithick", "{:3.3f} to {:3.3f}.".format(np.nanmin(sithick), np.nanmax(sithick))],
+            ["", "sisnconc", "{:3.3f} to {:3.3f}.".format(np.nanmin(sisnconc), np.nanmax(sisnconc))],
+            ["", "sisnthick", "{:3.3f} to {:3.3f}.".format(np.nanmin(sisnthick), np.nanmax(sisnthick))]
+        ])
         table.set_cols_width([30, 20, 30])
         print(table.draw() + "\n")
+        """
 
         return (
             wind,
@@ -617,7 +576,6 @@ class CMIP6_light:
             bias = np.zeros(
                 np.shape(bias_delta["ghi"][ctime.month[0] - 1, :, :])
             ) + np.nanmean(np.squeeze(bias_delta["ghi"][ctime.month[0] - 1, :, :]))
-            # print("Averaged bias month {}: {}".format(ctime.month[0], np.nanmean(bias)))
             calc_radiation = [
                 dask.delayed(self.radiation)(
                     clt[j, :],
@@ -1222,13 +1180,11 @@ class CMIP6_light:
         )
 
         for ind, model in enumerate(self.cmip6_models):
-            logging.info("[CMIP6_light] {} : {}".format(ind, model.name))
-            for member_id in model.member_ids:
-                logging.info("[CMIP6_light] Members : {}".format(member_id))
-
-        for model in self.cmip6_models:
             for member_id in model.member_ids:
                 model.current_member_id = member_id
+                logging.info(
+                    f"[CMIP6_light] {ind}/{len(self.cmip6_models)}: {model.name} member_id: {model.current_member_id}"
+                )
 
                 # Save datafiles to do calculations locally
                 if self.config.write_CMIP6_to_file:
@@ -1239,8 +1195,8 @@ class CMIP6_light:
                     self.perform_light_calculations(model, current_experiment_id)
 
 
-def main():
-    light = CMIP6_light()
+def main(args):
+    light = CMIP6_light(args)
     light.config.setup_logging()
     light.config.setup_parameters()
     logging.info("[CMIP6_config] logging started")
@@ -1251,30 +1207,31 @@ def main():
 
 if __name__ == "__main__":
     np.warnings.filterwarnings("ignore")
-    use_dask = False
-
-    if use_dask is False:
-        main()
-    else:
-        # https://docs.dask.org/en/latest/diagnostics-distributed.html
-        # https://docs.dask.org/en/latest/setup/single-distributed.html
-        from dask.distributed import Client
-
-        #   os.environ['NUMEXPR_MAX_THREADS'] = '8'
-        #   dask.config.set(scheduler='processes')
-        # dask.config.set({'array.slicing.split_large_chunks': True})
-
-        with Client() as client:  # (n_workers=4, threads_per_worker=4, processes=True, memory_limit='15GB') as client:
-            status = client.scheduler_info()["services"]
-            assert client.status == "running"
-            logging.info("[CMIP6_light] client {}".format(client))
-            logging.info(
-                "Dask started with status at: http://localhost:{}/status".format(
-                    status["dashboard"]
-                )
+    # https://docs.dask.org/en/latest/diagnostics-distributed.html
+    # https://docs.dask.org/en/latest/setup/single-distributed.html
+    dask.config.set({"array.slicing.split_large_chunks": True})
+    parser = ArgumentParser(formatter_class=ArgumentDefaultsHelpFormatter)
+    parser.add_argument(
+        "-m", "--source_id", dest="source_id", help="source_id", type=str, required=True
+    )
+    parser.add_argument(
+        "-i", "--member_id", dest="member_id", help="member_id", type=str, required=True
+    )
+    args = parser.parse_args()
+    main(args)
+    """    
+    with Client() as client:  # (n_workers=4, threads_per_worker=4, processes=True, memory_limit='15GB') as client:
+        status = client.scheduler_info()["services"]
+        assert client.status == "running"
+        logging.info("[CMIP6_light] client {}".format(client))
+        logging.info(
+            "Dask started with status at: http://localhost:{}/status".format(
+                status["dashboard"]
             )
-            main()
-            client.close()
-            assert client.status == "closed"
+        )
+        main(args)
+        client.close()
+        assert client.status == "closed"
+    """
 
-        logging.info("[CMIP6_light] Execution of downscaling completed")
+    logging.info("[CMIP6_light] Execution of downscaling completed")
