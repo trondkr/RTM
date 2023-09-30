@@ -12,8 +12,8 @@ import pandas as pd
 import texttable
 import xarray as xr
 import xesmf as xe
-from cmip6_preprocessing.preprocessing import combined_preprocessing
 from google.cloud import storage
+from xmip.preprocessing import combined_preprocessing
 
 import CMIP6_config
 import CMIP6_model
@@ -86,7 +86,7 @@ class CMIP6_IO:
         blob = self.bucket.blob(fname)
         blob.md5_hash = md5
         blob.upload_from_filename(fname)
-        self.logger.info(f"[CMIP6_IO] Finished uploading to : {fname}")
+        self.logger.info(f"[CMIP6_IO] Finished uploading to : {fname} ({blob.name})")
 
     def print_table_of_models_and_members(self):
         table = texttable.Texttable()
@@ -104,6 +104,17 @@ class CMIP6_IO:
         table.set_cols_width([30, 30, 50])
         print(table.draw() + "\n")
 
+    def list_dataset_on_gs(self, prefix: str) -> []:
+        """
+        List all files on gs at a given prefix
+        """
+        files_on_gcs = []
+
+        for blob in self.storage_client.list_blobs(self.bucket, prefix=prefix):
+            files_on_gcs.append(blob.name)
+        self.logger.info(f"[CMIP6_IO] Found {len(files_on_gcs)} on gs at {prefix}")
+        return files_on_gcs
+
     def open_dataset_on_gs(
         self, file_name: str, decode_times: bool = True
     ) -> xr.Dataset:
@@ -111,8 +122,8 @@ class CMIP6_IO:
             self.storage_client
         ):
             file_name = f"{self.bucket_name}/{file_name}"
-
-            self.logger.info(f"[CMIP6_IO] Opening file {file_name}")
+            print(f"[CMIP6_IO] Opening file {file_name}")
+            self.logger.debug(f"[CMIP6_IO] Opening file {file_name}")
             fileObj = self.fs.open(file_name)
             return xr.open_dataset(
                 fileObj, engine="h5netcdf", decode_times=decode_times
@@ -141,12 +152,14 @@ class CMIP6_IO:
                 current_experiment_id,
                 variable_id,
             )
-            print(netcdf_filename)
+
             if storage.Blob(bucket=self.bucket, name=netcdf_filename).exists(
                 self.storage_client
             ):
                 ds = self.open_dataset_on_gs(netcdf_filename, decode_times=True)
                 # Extract the time period of interest
+                print(source_id, variable_id)
+
                 ds = ds.sel(
                     time=slice(config.start_date, config.end_date),
                     y=slice(config.min_lat, config.max_lat),
@@ -161,6 +174,7 @@ class CMIP6_IO:
                         current_experiment_id,
                     )
                 )
+
                 # Save the info to model object
                 if not member_id in model_object.member_ids:
                     model_object.member_ids.append(member_id)
@@ -175,11 +189,11 @@ class CMIP6_IO:
                 self.dataset_into_model_dictionary(
                     config.member_id, variable_id, ds, model_object
                 )
+
         self.models.append(model_object)
+
         logging.info(
-            "[CMIP6_IO] Stored {} variables for model {}".format(
-                len(model_object.ocean_vars), model_object.name
-            )
+            f"[CMIP6_IO] Stored {len(model_object.ocean_vars)} variables for model {model_object.name}"
         )
 
     def to_360day_monthly(self, ds: xr.Dataset):
@@ -316,6 +330,9 @@ class CMIP6_IO:
                             dset_processed = dset_processed.isel(
                                 lev=config.selected_depth
                             )
+                    if variable_id in ["thetao"]:
+                        dset_processed = dset_processed.isel(lev=config.selected_depth)
+
                     if variable_id in ["ph"]:
                         logging.info(
                             "[CMIP6_IO] => Extract only depth level {}".format(
@@ -323,6 +340,7 @@ class CMIP6_IO:
                             )
                         )
                         dset_processed = dset_processed.isel(lev=config.selected_depth)
+
                     collection_of_variables.append(variable_id)
 
                     # Save the info to model object
@@ -457,8 +475,9 @@ class CMIP6_IO:
             if all(
                 item in current_ds.dims for item in ["time", "y", "x", "vertex", "bnds"]
             ):
+                #   ds_trans = current_ds.chunk({'time': -1}).transpose('bnds', 'time', 'vertex', 'y', 'x')
                 ds_trans = current_ds.chunk({"time": -1}).transpose(
-                    "bnds", "time", "vertex", "y", "x"
+                    "time", "y", "x", "bnds", "vertex"
                 )
             elif all(
                 item in current_ds.dims
@@ -491,6 +510,11 @@ class CMIP6_IO:
                     key, out_amon, ds_out, interpolation_method=config.interp
                 )
             else:
+                ds_out = self.create_grid(ds_trans, key, 1).sel(
+                    lat=slice(config.min_lat, config.max_lat),
+                    lon=slice(config.min_lon, config.max_lon),
+                )
+
                 out = re.regrid_variable(
                     key, ds_trans, ds_out, interpolation_method=config.interp
                 )
@@ -518,4 +542,45 @@ class CMIP6_IO:
                 #    ds = ds_trans.to_dataset()
                 self.write_netcdf(out.chunk({"time": -1}), out_file=outfile)
 
-                logging.info("[CMIP6_light] wrote variable {} to file".format(key))
+                self.upload_to_gcs(outfile)
+                logging.info(f"[CMIP6_light] wrote variable {key} to file")
+
+    def create_grid(self, ds, var_name, step):
+        # 2. We create a grid for CMIP6 data which is a subset of the GLORYS grid resolution and an approximation to
+        # # the actual CMIP6 resolution. This makes
+        # the two grids compatible - a requirement from ISIMIP3BASD
+        #
+        # We want the number of grid points to be a subset of the full resolution in
+        # the GLORYS grid so we get the total count of values.
+        print("ds before", ds)
+        lats = ds.lat.values
+        counts_lat = int(len(lats) / step)
+        lats_new = np.linspace(
+            int(round(np.ceil(np.min(lats)))),
+            int(round(np.floor(np.max(lats)))),
+            counts_lat,
+            endpoint=True,
+        )
+
+        # Resolution from GLORYS file
+        lons = ds.lon.values
+        counts_lon = int(len(lons) / step)
+        # Spatial range from the CMIP6 file
+
+        lons_new = np.linspace(
+            int(round(np.ceil(np.min(lons)))),
+            int(round(np.floor(np.max(lons)))),
+            counts_lon,
+            endpoint=True,
+        )
+
+        # Create a DataArray void of data
+        return xr.DataArray(
+            name=var_name,
+            coords={
+                "time": (["time"], ds.time.values),
+                "lat": (["lat"], lats_new),
+                "lon": (["lon"], lons_new),
+            },
+            dims=["time", "lat", "lon"],
+        ).to_dataset()
