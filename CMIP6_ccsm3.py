@@ -68,20 +68,23 @@ class CMIP6_CCSM3:
 
         snowpatch = 0.02  # https://journals.ametsoc.org/jcli/article/26/4/1355/34253/The-Sensitivity-of-the-Arctic-Ocean-Sea-Ice
         puny = 1.0e-11
-        Timelt = 0.0  # melting temp.ice top surface(C)
 
         # snow albedo - al(albedo)v/i(visual/near-infrared)dr/df(direct/diffuse)ni/ns(ice/snow)
-        # hi = ice height
         fhtan = np.arctan(ahmax * 4.0)
 
-        # bare ice, thickness dependence
-        # fh = np.zeros(np.shape(osa))
+        # Bare ice, thickness dependence. When values are less than  0.5 then this function (fh)
+        # takes effect.
         fh = np.where(
             (np.arctan(ice_thickness * 4.0) / fhtan) >= 1.0,
             0.0,
             np.arctan(ice_thickness * 4.0) / fhtan,
         )
-        # albo_dr = osa.copy()
+
+        # Set the ice albedo where we dont have open ocean albedo. This is for thick ice
+        # and the values are modified according to thickness and melting ponds further down.
+        # Björk, Göran, Christian Stranne, and Karin Borenäs. 2013.
+        # “The Sensitivity of the Arctic Ocean Sea Ice Thickness and Its Dependence on the Surface
+        # Albedo Parameterization.” Journal of Climate 26 (4): 1355–70.
         albo_dr = np.where(np.isnan(osa), albicev, osa)
         albo = albo_dr * (1.0 - fh)
 
@@ -90,14 +93,14 @@ class CMIP6_CCSM3:
 
         # bare ice, temperature dependence (where snow is zero). Affects albedo when
         # temperature is between -1 and 0.
-        dTs = xr.where(air_temp > -1, 1.0, 0.0)
-        fT = -np.min(dTs / dT_mlt, 0)
+        dTs = xr.where(air_temp > -1, air_temp, 0.0)
+        fT = np.min(dTs / dT_mlt - 1.0, 0)
 
         # Account for melting ponds (only if ice thicker than 0.1 m) and
         # snow patches. Scale by ice and snow concentrations.
         albo_dr = np.where(
             (ice_thickness >= 0.1) & (snow_thickness < puny),
-            (albo_i - dalb_mlt * fT) * ice_concentration,
+            np.max((albo_i - dalb_mlt * fT) * ice_concentration, 0.06),
             albo_dr,
         )
         albo_dr = np.where(

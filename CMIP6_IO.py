@@ -34,7 +34,7 @@ class CMIP6_IO:
         self, dir, model_name, member_id, current_experiment_id, key
     ):
         if member_id is None:
-            return "{}/{}/{}/CMIP6_{}_{}_{}.nc".format(
+            return "{}/{}/{}/CMIP6_{}_{}_{}_weighted.nc".format(
                 dir,
                 current_experiment_id,
                 model_name,

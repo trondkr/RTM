@@ -480,8 +480,8 @@ class CMIP6_ridgeplot:
         if not os.path.exists(os.path.dirname(outfile)):
             os.makedirs(os.path.dirname(outfile), exist_ok=True)
 
-        start_times = [datetime(1993, 1, 1), datetime(2012, 1, 1)]
-        end_times = [datetime(2012, 1, 1), datetime(2020, 1, 1)]
+        start_times = [datetime(1980, 1, 1), datetime(2041, 1, 1)]
+        end_times = [datetime(2000, 1, 1), datetime(2060, 1, 1)]
 
         step = 10
         # TODO: Add longer historical period by joining two lists.

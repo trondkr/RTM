@@ -157,7 +157,7 @@ class Config_albedo:
         #                                                                                   self.fractions_shortwave_nir)))
 
         # Read in the ice parameterization for how ice absorbs irradiance as a function of wavelength.
-        # Based on Perovich and Govoni 1996
+        # Based on Perovich 1996
         ice_wl = pd.read_csv(
             "ice-absorption/sea_ice_absorption_perovich_and_govoni_interpolated.csv",
             header=0,
