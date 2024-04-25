@@ -68,7 +68,19 @@ class Config_albedo:
         if self.sensitivity_run:
             # For sensitivity runs we do 40 year periods to
             # evaluate the sensitivity from individual factors.
-            self.end_date = "1984-12-16"
+            self.end_date = "1982-12-16"
+            self.scenarios = [
+                "osa",
+                "no_ice",
+                "no_chl",
+                "no_wind",
+                "no_osa",
+                "no_meltpond",
+                "snow_sensitivity",
+            ]
+        else:
+            self.scenarios = ["osa"]
+
         self.use_local_CMIP6_files = True
         self.write_CMIP6_to_file = False
         self.perform_light_calculations = True

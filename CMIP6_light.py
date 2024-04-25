@@ -744,20 +744,7 @@ class CMIP6_light:
                         zenith = dask.compute(calc_zenith)
                         zeniths = np.asarray(zenith).reshape(m)
 
-                        if self.config.sensitivity_run:
-                            scenarios = [
-                                "osa",
-                                "no_ice",
-                                "no_chl",
-                                "no_wind",
-                                "no_osa",
-                                "no_meltpond",
-                                "snow_sensitivity",
-                            ]
-
-                        else:
-                            scenarios = ["osa"]
-                        for scenario in scenarios:
+                        for scenario in self.config.scenarios:
                             if scenario == "no_chl":
                                 chl_scale = 0.0
                             else:
@@ -1106,29 +1093,30 @@ class CMIP6_light:
 
                         time_counter += 1
 
-        # Upload fimnal results to GCS
-        for vari in [
-            "par",
-            "sw_srf",
-            "ghi",
-            "uvb",
-            "uva",
-            "uv",
-            "uv_srf",
-            "uvi",
-            "osa",
-        ]:
-            filename = self.get_filename(
-                vari,
-                model_object.name,
-                model_object.current_member_id,
-                scenario,
-                current_experiment_id,
-            )
-            filename_gcs = filename.replace(self.config.outdir, "")
-            filename_gcs = f"{self.config.cmip6_outdir}{filename_gcs}"
-            io.upload_to_gcs(filename, fname_gcs=filename_gcs)
-            os.remove(filename)
+        # Upload final results to GCS
+        for scenario in self.config.scenarios:
+            for vari in [
+                "par",
+                "sw_srf",
+                "ghi",
+                "uvb",
+                "uva",
+                "uv",
+                "uv_srf",
+                "uvi",
+                "osa",
+            ]:
+                filename = self.get_filename(
+                    vari,
+                    model_object.name,
+                    model_object.current_member_id,
+                    scenario,
+                    current_experiment_id,
+                )
+                filename_gcs = filename.replace(self.config.outdir, "")
+                filename_gcs = f"{self.config.cmip6_outdir}{filename_gcs}"
+                io.upload_to_gcs(filename, fname_gcs=filename_gcs)
+                os.remove(filename)
 
     def get_filename(
         self, vari, model_name, member_id, scenario, current_experiment_id

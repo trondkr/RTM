@@ -1,4 +1,3 @@
----
 #-------------------------------------------------------------------------------#
 #               Qodana analysis is configured by qodana.yaml file               #
 #             https://www.jetbrains.com/help/qodana/qodana-yaml.html            #
@@ -23,5 +22,10 @@ include:
 #  - id: <plugin.id> #(plugin id can be found at https://plugins.jetbrains.com)
 #Specify Qodana linter for analysis (Applied in CI/CD pipeline)
 linter: jetbrains/qodana-python:latest
+bootstrap: |
+  rm -rf .idea
+  pip install -r requirements.txt --quiet
+profile:
+  name: qodana.recommended
 exclude:
   - name: PyUnresolvedReferencesInspection
