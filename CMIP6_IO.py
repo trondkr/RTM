@@ -74,7 +74,7 @@ class CMIP6_IO:
 
         return base64.b64encode(hash_md5.digest()).decode()
 
-    def upload_to_gcs(self, fname: str):
+    def upload_to_gcs(self, fname: str, fname_gcs: str = None):
         """upload file to GCS.
 
         Method that uploads file to the GCS blob. Calculates the md5 sha
@@ -83,7 +83,10 @@ class CMIP6_IO:
         """
 
         md5 = self.calculate_md5_sha(f"{fname}")
-        blob = self.bucket.blob(fname)
+        if fname_gcs:
+            blob = self.bucket.blob(fname_gcs)
+        else:
+            blob = self.bucket.blob(fname)
         blob.md5_hash = md5
         blob.upload_from_filename(fname)
         self.logger.info(f"[CMIP6_IO] Finished uploading to : {fname} ({blob.name})")

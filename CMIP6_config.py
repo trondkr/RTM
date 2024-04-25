@@ -1,4 +1,5 @@
 import logging
+import os
 
 import gcsfs
 import numpy as np
@@ -20,7 +21,7 @@ class Config_albedo:
         self.grid_labels = ["gn"]  # Can be gr=grid rotated, or gn=grid native
 
         # FOR RTM we are using:
-        # "CMCC-ESM2": ["r1i1p2f1"] ok
+        # "CMCC-ESM2": ["r1i1p2f1"]
         # "CanESM5":  ["r1i1p2f1","r2i1p2f1","r9i1p2f1","r10i1p2f1","r7i1p2f1","r6i1p2f1","r3i1p2f1"]
         # "MPI-ESM1-2-LR": ["r10i1p1f1","r1i1p1f1","r4i1p1f1","r2i1p1f1","r6i1p1f1"]
         # "UKESM1-0-LL": ["r1i1p1f2","r2i1p1f2","r3i1p1f2","r4i1p1f2","r8i1p1f2"]
@@ -59,18 +60,25 @@ class Config_albedo:
 
         self.bias_correct_ghi = True
         self.bias_correct_file = "bias_correct/ghi_deltas.nc"
-
+        self.sensitivity_run = True
         self.dset_dict = {}
         self.start_date = "1979-01-01"
         self.end_date = "2099-12-16"
-        # self.clim_start = "1961-01-01"
-        # self.clim_end = "1990-01-01"
+
+        if self.sensitivity_run:
+            # For sensitivity runs we do 40 year periods to
+            # evaluate the sensitivity from individual factors.
+            self.end_date = "1984-12-16"
         self.use_local_CMIP6_files = True
         self.write_CMIP6_to_file = False
         self.perform_light_calculations = True
 
         self.cmip6_netcdf_dir = "light"
         self.cmip6_outdir = "light"
+        if self.sensitivity_run:
+            self.cmip6_outdir = "light_sensitivity"
+        if os.path.exists(self.cmip6_outdir):
+            os.makedirs(self.cmip6_outdir, exist_ok=True)
 
         # Cut the region of the global data to these longitude and latitudes
         if self.write_CMIP6_to_file:
@@ -86,7 +94,10 @@ class Config_albedo:
 
         # ESMF and Dask related
         self.interp = "bilinear"
-        self.outdir = "light"
+        self.outdir = f"/mnt/disks/actea-disk-1/{self.cmip6_outdir}"
+        if os.path.exists(self.outdir):
+            os.makedirs(self.outdir, exist_ok=True)
+
         self.selected_depth = 0
         self.models = {}
 

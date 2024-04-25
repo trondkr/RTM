@@ -20,7 +20,7 @@ from google.cloud import storage
 
 import CMIP6_albedo_plot
 import CMIP6_albedo_utils
-import CMIP6_ccsm3
+import CMIP6_cesm3
 import CMIP6_config
 import CMIP6_date_tools
 import CMIP6_IO
@@ -113,7 +113,6 @@ class CMIP6_light:
         self,
         cloud_covers,
         water_vapor_content,
-        temp,
         latitude,
         ctime,
         system,
@@ -562,7 +561,6 @@ class CMIP6_light:
         pv_system,
         clt: np.ndarray,
         prw: np.ndarray,
-        tas: np.ndarray,
         ozone: np.ndarray,
         direct_OSA: np.ndarray,
         lat: np.ndarray,
@@ -576,11 +574,11 @@ class CMIP6_light:
             bias = np.zeros(
                 np.shape(bias_delta["ghi"][ctime.month[0] - 1, :, :])
             ) + np.nanmean(np.squeeze(bias_delta["ghi"][ctime.month[0] - 1, :, :]))
+
             calc_radiation = [
                 dask.delayed(self.radiation)(
                     clt[j, :],
                     prw[j, :],
-                    tas[j, :],
                     lat[j, 0],
                     ctime,
                     pv_system,
@@ -595,7 +593,6 @@ class CMIP6_light:
                 dask.delayed(self.radiation)(
                     clt[j, :],
                     prw[j, :],
-                    tas[j, :],
                     lat[j, 0],
                     ctime,
                     pv_system,
@@ -674,7 +671,7 @@ class CMIP6_light:
         io = CMIP6_IO.CMIP6_IO()
 
         times = model_object.ds_sets[model_object.current_member_id]["tos"].time
-        self.cmip6_ccsm3 = CMIP6_ccsm3.CMIP6_CCSM3()
+        self.CMIP6_cesm3 = CMIP6_cesm3.CMIP6_cesm3()
 
         toz_ds = self.get_ozone_dataset(current_experiment_id)
         time_counter = 0
@@ -747,18 +744,49 @@ class CMIP6_light:
                         zenith = dask.compute(calc_zenith)
                         zeniths = np.asarray(zenith).reshape(m)
 
-                        scenarios = ["osa"]  # , "no_chl", "no_wind", "normal"]
+                        if self.config.sensitivity_run:
+                            scenarios = [
+                                "osa",
+                                "no_ice",
+                                "no_chl",
+                                "no_wind",
+                                "no_osa",
+                                "no_meltpond",
+                                "snow_sensitivity",
+                            ]
+
+                        else:
+                            scenarios = ["osa"]
                         for scenario in scenarios:
                             if scenario == "no_chl":
                                 chl_scale = 0.0
                             else:
                                 chl_scale = 1.0
-
                             if scenario == "no_wind":
                                 wind_scale = 0.0
                             else:
                                 wind_scale = 1.0
-                            #  logging.info("[CMIP6_light] Running scenario: {}".format(scenario))
+                            if scenario == "no_clouds":
+                                cloud_scale = 0.0
+                            else:
+                                cloud_scale = 1.0
+                            if scenario == "no_ice":
+                                ice_scale = 0.0
+                            else:
+                                ice_scale = 1.0
+                            if scenario == "no_meltpond":
+                                tas_scale = -20.0  # Celsius
+                            else:
+                                tas_scale = 0.0
+                            if scenario == "snow_sensitivity":
+                                snow_attenuation = 5.9  # Lebrun et al. 2023
+                            else:
+                                # A value of 20 m-1 was used in the original (Budgell) ROMS sea ice module (see line 711 in bulk_flux.F).
+                                snow_attenuation = 20.0  # ROMS ice code bulk_flux.f90
+
+                            logging.info(
+                                "[CMIP6_light] Running scenario: {}".format(scenario)
+                            )
                             # Calculate OSA for each grid point (this is without the effect of sea ice and snow)
                             if hour_of_day == 12:
                                 zr = [
@@ -790,9 +818,8 @@ class CMIP6_light:
                             direct_sw, diffuse_sw, ghi = self.calculate_radiation(
                                 ctime,
                                 pv_system,
-                                clt,
+                                clt * cloud_scale,
                                 prw,
-                                tas,
                                 ozone,
                                 direct_OSA,
                                 lat,
@@ -821,26 +848,31 @@ class CMIP6_light:
                                 OSA = np.where(np.isnan(OSA), np.nanmean(OSA), OSA)
 
                             # Add the effect of snow and ice on broadband albedo
-                            OSA_ice_ocean = self.cmip6_ccsm3.direct_and_diffuse_albedo_from_snow_and_ice(
-                                OSA, sisnconc, sisnthick, siconc, sithick, tas
+                            OSA_ice_ocean = self.CMIP6_cesm3.direct_and_diffuse_albedo_from_snow_and_ice(
+                                OSA,
+                                sisnconc * ice_scale,
+                                sisnthick * ice_scale,
+                                siconc * ice_scale,
+                                sithick * ice_scale,
+                                tas + tas_scale,
                             )
                             logging.debug(
-                                f"[CMIP6_light] GHI range {np.nanmin(ghi)} to {np.nanmax(ghi)}"
+                                f"[CMIP6_light] GHI range {np.nanmin(ghi)} to {np.nanmax(ghi)} (scenario: {scenario})"
                             )
                             logging.debug(
-                                f"[CMIP6_light] OSA range {np.nanmin(OSA_ice_ocean)} to {np.nanmax(OSA_ice_ocean)}"
+                                f"[CMIP6_light] OSA range {np.nanmin(OSA_ice_ocean)} to {np.nanmax(OSA_ice_ocean)} (scenario: {scenario})"
                             )
 
-                            if scenario == "normal":
-                                is_albedo_dr_vis = np.where(
-                                    direct_OSA < 0.08, 0.06, OSA_ice_ocean
+                            if scenario == "no_osa":
+                                OSA_ice_ocean = np.where(
+                                    OSA_ice_ocean < 0.08, 0.06, OSA_ice_ocean
                                 )
 
                             # Calculate shortwave radiation entering the ocean after accounting for the effect of snow
                             # and ice to the direct and diffuse albedos and for attenuation (no scattering).
                             # The final product adds diffuse and direct
                             # light for the spectrum in question (vis or uv).
-                            sw_vis_attenuation_corrected_for_snow_ice_chl = self.cmip6_ccsm3.compute_surface_solar_for_specific_wavelength_band(
+                            sw_vis_attenuation_corrected_for_snow_ice_chl = self.CMIP6_cesm3.compute_surface_solar_for_specific_wavelength_band(
                                 OSA_ice_ocean,
                                 direct_sw[
                                     self.config.start_index_visible : self.config.end_index_visible,
@@ -853,18 +885,19 @@ class CMIP6_light:
                                     :,
                                 ],
                                 chl * chl_scale,
-                                sisnthick,
-                                sithick,
-                                siconc,
-                                sisnconc,
-                                tas,
+                                sisnthick * ice_scale,
+                                sithick * ice_scale,
+                                siconc * ice_scale,
+                                sisnconc * ice_scale,
+                                tas + tas_scale,
                                 lon,
                                 lat,
                                 model_object,
+                                snow_attenuation,
                                 spectrum="vis",
                             )
 
-                            sw_uv_attenuation_corrected_for_snow_ice_chl = self.cmip6_ccsm3.compute_surface_solar_for_specific_wavelength_band(
+                            sw_uv_attenuation_corrected_for_snow_ice_chl = self.CMIP6_cesm3.compute_surface_solar_for_specific_wavelength_band(
                                 OSA_ice_ocean,
                                 direct_sw[
                                     self.config.start_index_uv : self.config.end_index_uv,
@@ -877,14 +910,15 @@ class CMIP6_light:
                                     :,
                                 ],
                                 chl * chl_scale,
-                                sisnthick,
-                                sithick,
-                                siconc,
-                                sisnconc,
-                                tas,
+                                sisnthick * ice_scale,
+                                sithick * ice_scale,
+                                siconc * ice_scale,
+                                sisnconc * ice_scale,
+                                tas + tas_scale,
                                 lon,
                                 lat,
                                 model_object,
+                                snow_attenuation,
                                 spectrum="uv",
                             )
                             # Integrate values across wavelengths according to which variable we are considering
@@ -979,7 +1013,7 @@ class CMIP6_light:
                                 )
                             )
 
-                            uvi = self.cmip6_ccsm3.calculate_uvi(
+                            uvi = self.CMIP6_cesm3.calculate_uvi(
                                 sw_uv_attenuation_corrected_for_snow_ice_chl,
                                 ozone,
                                 wavelengths[
@@ -1070,7 +1104,7 @@ class CMIP6_light:
                                     lon[0, :],
                                 )
 
-                            time_counter += 1
+                        time_counter += 1
 
         # Upload fimnal results to GCS
         for vari in [
@@ -1091,14 +1125,16 @@ class CMIP6_light:
                 scenario,
                 current_experiment_id,
             )
-            io.upload_to_gcs(filename)
+            filename_gcs = filename.replace(self.config.outdir, "")
+            filename_gcs = f"{self.config.cmip6_outdir}{filename_gcs}"
+            io.upload_to_gcs(filename, fname_gcs=filename_gcs)
             os.remove(filename)
 
     def get_filename(
         self, vari, model_name, member_id, scenario, current_experiment_id
     ):
         """Create the filename depending on scenario, member_id, and experiment_id"""
-        out = f"{self.config.outdir}/ncfiles/{current_experiment_id}"
+        out = f"{self.config.outdir}/{current_experiment_id}"
         if not os.path.exists(out):
             os.makedirs(out, exist_ok=True)
         return f"{out}/{vari}_{model_name}_{member_id}_{self.config.start_date}-{self.config.end_date}_scenario_{scenario}_{current_experiment_id}.nc"
@@ -1106,16 +1142,15 @@ class CMIP6_light:
     def save_irradiance_to_netcdf(
         self, filename, da, vari, time_counter, time, lat, lon
     ):
-        if time_counter == 0:
+        if time_counter == 0 and os.path.exists(filename) is False:
             cdf = netCDF4.Dataset(filename, mode="w")
-            cdf.title = "Test"
-            cdf.description = "Created for grid file:"
+            cdf.title = f"RTM calculations of {vari}"
+            cdf.description = "Created for revision 2 of paper."
 
-            cdf.history = "Created {}".format(datetime.datetime.now())
-            cdf.link = "https://github.com/trondkr/model2roms"
+            cdf.history = f"Created {datetime.datetime.now()}"
+            cdf.link = "https://github.com/trondkr/RTM"
 
             # Define dimensions
-
             cdf.createDimension("lon", len(lon))
             cdf.createDimension("lat", len(lat))
             cdf.createDimension("time", None)
@@ -1153,7 +1188,6 @@ class CMIP6_light:
 
         else:
             cdf = netCDF4.Dataset(filename, "a")
-
         cdf.variables[vari][time_counter, :, :] = da
         cdf.variables["time"][time_counter] = netCDF4.date2num(
             time, units="days since 2000-01-16 00:00:00", calendar="standard"

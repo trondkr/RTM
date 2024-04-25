@@ -4,7 +4,7 @@ from datetime import datetime
 import numpy as np
 import xarray as xr
 
-import CMIP6_ccsm3
+import CMIP6_cesm3
 import CMIP6_config
 import CMIP6_IO
 import CMIP6_model
@@ -23,17 +23,17 @@ class TestCMIP6_light(unittest.TestCase):
         self.sisnconc = np.array([[0, 0.5], [0, 0.5]])
         self.siconc = np.array([[0, 0.5], [0, 0.75]])
 
-        self.ccsm3 = CMIP6_ccsm3.CMIP6_CCSM3()
+        self.cesm3 = CMIP6_cesm3.CMIP6_cesm3()
 
     def test_calculate_diffuse_albedo_gives_correct_result(self):
         result_should_be = np.array([[0.06, 0.4525], [0.06, 0.64875]])
-        albedo = self.ccsm3.calculate_diffuse_albedo_per_grid_point(
+        albedo = self.cesm3.calculate_diffuse_albedo_per_grid_point(
             sisnconc=self.sisnconc, siconc=self.siconc
         )
         np.testing.assert_almost_equal(result_should_be, albedo)
 
     def test_calculate_diffuse_albedo_gives_correct_result_over_seawater(self):
-        albedo = self.ccsm3.calculate_diffuse_albedo_per_grid_point(
+        albedo = self.cesm3.calculate_diffuse_albedo_per_grid_point(
             sisnconc=self.sisnconc, siconc=self.siconc
         )
 
@@ -44,7 +44,7 @@ class TestCMIP6_light(unittest.TestCase):
         self.siconc = np.random.randint(2, size=10)
         self.sisnconc = self.siconc / 2.0
 
-        albedo = self.ccsm3.calculate_diffuse_albedo_per_grid_point(
+        albedo = self.cesm3.calculate_diffuse_albedo_per_grid_point(
             sisnconc=self.sisnconc, siconc=self.siconc
         )
         np.testing.assert_almost_equal(albedo[self.siconc == 0], 0.06)
@@ -52,7 +52,7 @@ class TestCMIP6_light(unittest.TestCase):
     def test_calculate_diffuse_albedo_gives_correct_result_over_sea_no_seaice(self):
         self.siconc = np.random.randint(2, size=10) * 0
         self.sisnconc = np.random.randint(2, size=10) * 0
-        albedo = self.ccsm3.calculate_diffuse_albedo_per_grid_point(
+        albedo = self.cesm3.calculate_diffuse_albedo_per_grid_point(
             sisnconc=self.sisnconc, siconc=self.siconc
         )
         np.testing.assert_allclose(albedo, 0.06)

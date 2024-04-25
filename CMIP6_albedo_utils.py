@@ -190,12 +190,12 @@ def calculate_OSA(
     σ = np.sqrt(0.003 + 0.00512 * uv)
 
     # Direct reflection
-    alpha_direct = calculate_direct_reflection(refractive_indexes, µ, σ)
+    alpha_direct = 0.0 * calculate_direct_reflection(refractive_indexes, µ, σ) + 0.06
 
     # Diffuse reflection
     alpha_diffuse = calculate_diffuse_reflection(refractive_indexes, σ)
-    # Reflection from chlorophyll and biological pigments
 
+    # Reflection from chlorophyll and biological pigments
     alpha_direct_chl = calculate_direct_reflection_from_chl(
         wavelengths, chl, alpha_chl, alpha_w, beta_w, σ, µ, alpha_direct
     )
