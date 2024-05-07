@@ -22,9 +22,9 @@ def calc_trend(xarr: xr.DataArray):
     else:
         x = (
             xarr.time.to_pandas()
-            .index.to_datetimeindex()
-            .to_julian_date()
-            .values[:, None]
+                .index.to_datetimeindex()
+                .to_julian_date()
+                .values[:, None]
         )
     y = xarr.to_masked_array().reshape(n, -1)
 
@@ -37,8 +37,8 @@ def calc_trend(xarr: xr.DataArray):
     xa = x - xm  # anomaly
 
     # variance and covariances
-    xss = (xa**2).sum(0) / (n - 1)  # variance of x (with df as n-1)
-    yss = (ya**2).sum(0) / (n - 1)  # variance of y (with df as n-1)
+    xss = (xa ** 2).sum(0) / (n - 1)  # variance of x (with df as n-1)
+    yss = (ya ** 2).sum(0) / (n - 1)  # variance of y (with df as n-1)
     xys = (xa * ya).sum(0) / (n - 1)  # covariance (with df as n-1)
     # slope and intercept
     slope = xys / xss
@@ -63,7 +63,9 @@ def calc_trend(xarr: xr.DataArray):
     # do the same for the p value
     xarr_p = out.copy()
     xarr_p.name += "_Pvalue"
-    xarr_p.attrs["info"] = "If p < 0.05 then the results from 'slope' are significant."
+    xarr_p.attrs[
+        "info"
+    ] = "If p < 0.05 then the results from 'slope' are significant."
     xarr_p.values = p.reshape(xarr.shape[1:])
     # join these variables
     xarr_out = xarr_slope.to_dataset(name="slope")
@@ -72,7 +74,7 @@ def calc_trend(xarr: xr.DataArray):
     return xarr_out
 
 
-def xr_add_cyclic_point(da, varname):
+def xr_add_cyclic_point(da,varname):
     """
     Inputs
     da: xr.DataArray with dimensions (time,lat,lon)
@@ -84,13 +86,11 @@ def xr_add_cyclic_point(da, varname):
     wrap_data, wrap_lon = add_cyclic_point(da.values, coord=da.lon, axis=lon_idx)
 
     # Generate output DataArray with new data but same structure as input
-    return xr.DataArray(
-        data=wrap_data,
-        coords={"time": da.time, "lat": da.lat, "lon": wrap_lon},
-        dims=da.dims,
-        name=varname,
-        attrs=da.attrs,
-    )
+    return xr.DataArray(data=wrap_data,
+                        coords={'time': da.time, 'lat': da.lat, 'lon': wrap_lon},
+                        dims=da.dims,
+                        name=varname,
+                        attrs=da.attrs)
 
 
 def add_variable_units(cube, units: str):
@@ -104,11 +104,11 @@ def add_attributes_to_cube(cube):
     cube.attributes = a
     return cube
 
-
 def ds_to_iris(
-    ds: xr.Dataset,
-    var_name: str,
+        ds: xr.Dataset,
+        var_name: str,
 ):
+
     ds_iris = ds[var_name].to_iris()
     ds_iris = fix_coordinates_cube(ds_iris)
 
@@ -171,23 +171,20 @@ def calculate_areacello(ds, var_name):
     ds_singletime = ds.isel(time=0)
     # Convert the dataset to a cube as this adds correct units required by iris
     cube = ds_to_iris(ds_singletime, var_name)
-    print("cube", cube, lon, lat)
+    print("cube",cube, lon, lat)
     # Calculate the areacello for the grid and convert the result to km2
     # Uses iris area_weights function.
     # https://scitools.org.uk/iris/docs/v2.4.0/iris/iris/analysis/cartography.html#iris.analysis.cartography.area_weights
     m2_to_km2 = 1.0e-6
 
-    area_ends = (
-        iris.analysis.cartography.area_weights(cube, normalize=False)
-    ) * m2_to_km2
-    print("area_ends", area_ends)
+    area_ends = (iris.analysis.cartography.area_weights(cube, normalize=False)) * m2_to_km2
+    print("area_ends",area_ends)
     # Now convert the numpy array of areas to a dataset with the same dimension as the siconc
-    area_ds = xr.DataArray(
-        name="areacello",
-        data=area_ends,
-        coords={"lat": lat, "lon": lon},
-        dims=["lat", "lon"],
-    ).to_dataset()
+    area_ds = xr.DataArray(name="areacello",
+                           data=area_ends,
+                           coords={"lat": lat,
+                                   "lon": lon},
+                           dims=["lat", "lon"]).to_dataset()
 
     # Convert the resulting dataset to an iris cube
     area_cube = ds_to_iris(area_ds, "areacello")

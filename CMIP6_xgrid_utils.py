@@ -10,9 +10,9 @@ EARTH_RADIUS = 6371000.0  # m
 def _guess_bounds(points, bound_position=0.5):
     """
     Guess bounds of grid cells.
-
+    
     Simplified function from iris.coord.Coord.
-
+    
     Parameters
     ----------
     points: numpy.array
@@ -72,7 +72,7 @@ def _quadrant_area(radian_lat_bounds, radian_lon_bounds, radius_of_earth):
         raise ValueError("Bounds must be [n,2] array")
 
     # fill in a new array of areas
-    radius_sqr = radius_of_earth**2
+    radius_sqr = radius_of_earth ** 2
     radian_lat_64 = radian_lat_bounds.astype(np.float64)
     radian_lon_64 = radian_lon_bounds.astype(np.float64)
 
@@ -88,7 +88,7 @@ def grid_cell_areas(lon1d, lat1d, radius=EARTH_RADIUS):
     """
     Calculate grid cell areas given 1D arrays of longitudes and latitudes
     for a planet with the given radius.
-
+    
     Parameters
     ----------
     lon1d: numpy.array
@@ -113,7 +113,7 @@ def calc_spatial_mean(
 ):
     """
     Calculate spatial mean of xarray.DataArray with grid cell weighting.
-
+    
     Parameters
     ----------
     xr_da: xarray.DataArray
@@ -143,7 +143,7 @@ def calc_spatial_integral(
 ):
     """
     Calculate spatial integral of xarray.DataArray with grid cell weighting.
-
+    
     Parameters
     ----------
     xr_da: xarray.DataArray

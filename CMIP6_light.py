@@ -508,7 +508,7 @@ class CMIP6_light:
             sisnconc = sisnconc * percentage_to_ratio
         if np.nanmax(siconc) > 5:
             siconc = siconc * percentage_to_ratio
-        if np.max(clt) > 5:
+        if np.nanmax(clt) > 5:
             clt = clt * percentage_to_ratio
 
         # Calculate scalar wind and organize the data arrays to be used for  given time-step (month-year)
@@ -574,7 +574,7 @@ class CMIP6_light:
             bias = np.zeros(
                 np.shape(bias_delta["ghi"][ctime.month[0] - 1, :, :])
             ) + np.nanmean(np.squeeze(bias_delta["ghi"][ctime.month[0] - 1, :, :]))
-
+            
             calc_radiation = [
                 dask.delayed(self.radiation)(
                     clt[j, :],
@@ -743,37 +743,35 @@ class CMIP6_light:
                         ]
                         zenith = dask.compute(calc_zenith)
                         zeniths = np.asarray(zenith).reshape(m)
-
+                        
                         for scenario in self.config.scenarios:
-                            if scenario == "no_chl":
-                                chl_scale = 0.0
-                            else:
-                                chl_scale = 1.0
-                            if scenario == "no_wind":
-                                wind_scale = 0.0
-                            else:
-                                wind_scale = 1.0
-                            if scenario == "no_clouds":
-                                cloud_scale = 0.0
-                            else:
-                                cloud_scale = 1.0
-                            if scenario == "no_ice":
-                                ice_scale = 0.0
-                            else:
+                            if scenario == "no_chl": 
+                                chl_scale = 0.0 
+                            else: 
+                                chl_scale = 1.0 
+                            if scenario == "no_wind": 
+                                wind_scale = 0.0 
+                            else: 
+                                wind_scale = 1.0 
+                            if scenario == "no_clouds": 
+                                cloud_scale = 0.0 
+                            else: 
+                                cloud_scale = 1.0 
+                            if scenario == "no_ice": 
+                                ice_scale = 0.0 
+                            else: 
                                 ice_scale = 1.0
-                            if scenario == "no_meltpond":
-                                tas_scale = -20.0  # Celsius
-                            else:
+                            if scenario == "no_meltpond": 
+                                tas_scale = -2. # Celsius
+                            else: 
                                 tas_scale = 0.0
-                            if scenario == "snow_sensitivity":
-                                snow_attenuation = 5.9  # Lebrun et al. 2023
-                            else:
+                            if scenario == "snow_sensitivity": 
+                                snow_attenuation = 5.9 # Lebrun et al. 2023
+                            else: 
                                 # A value of 20 m-1 was used in the original (Budgell) ROMS sea ice module (see line 711 in bulk_flux.F).
-                                snow_attenuation = 20.0  # ROMS ice code bulk_flux.f90
+                                snow_attenuation = 20.0 # ROMS ice code bulk_flux.f90
 
-                            logging.info(
-                                "[CMIP6_light] Running scenario: {}".format(scenario)
-                            )
+                            logging.info("[CMIP6_light] Running scenario: {}".format(scenario))
                             # Calculate OSA for each grid point (this is without the effect of sea ice and snow)
                             if hour_of_day == 12:
                                 zr = [
@@ -805,7 +803,7 @@ class CMIP6_light:
                             direct_sw, diffuse_sw, ghi = self.calculate_radiation(
                                 ctime,
                                 pv_system,
-                                clt * cloud_scale,
+                                clt*cloud_scale,
                                 prw,
                                 ozone,
                                 direct_OSA,
@@ -836,13 +834,14 @@ class CMIP6_light:
 
                             # Add the effect of snow and ice on broadband albedo
                             OSA_ice_ocean = self.CMIP6_cesm3.direct_and_diffuse_albedo_from_snow_and_ice(
-                                OSA,
-                                sisnconc * ice_scale,
-                                sisnthick * ice_scale,
-                                siconc * ice_scale,
-                                sithick * ice_scale,
-                                tas + tas_scale,
+                                OSA, 
+                                sisnconc*ice_scale, 
+                                sisnthick*ice_scale, 
+                                siconc*ice_scale, 
+                                sithick*ice_scale, 
+                                tas+tas_scale
                             )
+
                             logging.debug(
                                 f"[CMIP6_light] GHI range {np.nanmin(ghi)} to {np.nanmax(ghi)} (scenario: {scenario})"
                             )
@@ -872,17 +871,11 @@ class CMIP6_light:
                                     :,
                                 ],
                                 chl * chl_scale,
-                                sisnthick * ice_scale,
-                                sithick * ice_scale,
-                                siconc * ice_scale,
-                                sisnconc * ice_scale,
-                                tas + tas_scale,
-                                lon,
-                                lat,
-                                model_object,
+                                sisnthick*ice_scale,
+                                sithick*ice_scale,
                                 snow_attenuation,
-                                spectrum="vis",
-                            )
+                                spectrum = "vis",
+                            )                                                               
 
                             sw_uv_attenuation_corrected_for_snow_ice_chl = self.CMIP6_cesm3.compute_surface_solar_for_specific_wavelength_band(
                                 OSA_ice_ocean,
@@ -897,16 +890,10 @@ class CMIP6_light:
                                     :,
                                 ],
                                 chl * chl_scale,
-                                sisnthick * ice_scale,
-                                sithick * ice_scale,
-                                siconc * ice_scale,
-                                sisnconc * ice_scale,
-                                tas + tas_scale,
-                                lon,
-                                lat,
-                                model_object,
+                                sisnthick*ice_scale,
+                                sithick*ice_scale,
                                 snow_attenuation,
-                                spectrum="uv",
+                                spectrum = "uv",
                             )
                             # Integrate values across wavelengths according to which variable we are considering
                             par = np.squeeze(
@@ -1131,6 +1118,7 @@ class CMIP6_light:
         self, filename, da, vari, time_counter, time, lat, lon
     ):
         if time_counter == 0 and os.path.exists(filename) is False:
+          
             cdf = netCDF4.Dataset(filename, mode="w")
             cdf.title = f"RTM calculations of {vari}"
             cdf.description = "Created for revision 2 of paper."
@@ -1226,18 +1214,28 @@ def main(args):
     for current_experiment_id in light.config.experiment_ids:
         light.calculate_light(current_experiment_id)
 
-
+    
 if __name__ == "__main__":
     np.warnings.filterwarnings("ignore")
     # https://docs.dask.org/en/latest/diagnostics-distributed.html
     # https://docs.dask.org/en/latest/setup/single-distributed.html
-    dask.config.set({"array.slicing.split_large_chunks": True})
+    dask.config.set({'array.slicing.split_large_chunks': True})
     parser = ArgumentParser(formatter_class=ArgumentDefaultsHelpFormatter)
     parser.add_argument(
-        "-m", "--source_id", dest="source_id", help="source_id", type=str, required=True
+        "-m",
+        "--source_id",
+        dest="source_id",
+        help="source_id",
+        type=str,
+        required=True
     )
     parser.add_argument(
-        "-i", "--member_id", dest="member_id", help="member_id", type=str, required=True
+        "-i",
+        "--member_id",
+        dest="member_id",
+        help="member_id",
+        type=str,
+        required=True
     )
     args = parser.parse_args()
     main(args)

@@ -10,7 +10,6 @@ class Config_albedo:
     """
     Class that is passed to the CMIP6 calculations containing the configuration.
     """
-
     def __init__(self):
         """
         This function initialized the configuration for the CMIP6 calculations.
@@ -27,10 +26,10 @@ class Config_albedo:
         # "UKESM1-0-LL": ["r1i1p1f2","r2i1p1f2","r3i1p1f2","r4i1p1f2","r8i1p1f2"]
         # "MPI-ESM1-2-HR": ["r1i1p1f1","r2i1p1f1"]
 
-        self.experiment_ids = ["ssp245", "ssp585"]
+        self.experiment_ids = ["ssp245"] #,"ssp585"]
         self.source_id = None
         self.member_id = None
-
+        
         self.variable_ids = [
             "prw",
             "clt",
@@ -57,30 +56,23 @@ class Config_albedo:
             "Amon",
             "Omon",
         ]
-
+        
         self.bias_correct_ghi = True
         self.bias_correct_file = "bias_correct/ghi_deltas.nc"
         self.sensitivity_run = True
         self.dset_dict = {}
         self.start_date = "1979-01-01"
         self.end_date = "2099-12-16"
-
+        
         if self.sensitivity_run:
-            # For sensitivity runs we do 40 year periods to
+            # For sensitivity runs we do 40 year periods to 
             # evaluate the sensitivity from individual factors.
-            self.end_date = "1982-12-16"
-            self.scenarios = [
-                "osa",
-                "no_ice",
-                "no_chl",
-                "no_wind",
-                "no_osa",
-                "no_meltpond",
-                "snow_sensitivity",
-            ]
+            self.end_date = "1989-12-16"
+            self.scenarios = ["osa", "no_ice", "no_chl", "no_wind", "no_osa", "no_meltpond", "snow_sensitivity"]
+         #   self.scenarios = ["osa","snow_sensitivity"]
         else:
             self.scenarios = ["osa"]
-
+            
         self.use_local_CMIP6_files = True
         self.write_CMIP6_to_file = False
         self.perform_light_calculations = True
@@ -91,7 +83,7 @@ class Config_albedo:
             self.cmip6_outdir = "light_sensitivity"
         if os.path.exists(self.cmip6_outdir):
             os.makedirs(self.cmip6_outdir, exist_ok=True)
-
+            
         # Cut the region of the global data to these longitude and latitudes
         if self.write_CMIP6_to_file:
             # We want to save the entire northern hemisphere for possible use later
@@ -109,11 +101,11 @@ class Config_albedo:
         self.outdir = f"/mnt/disks/actea-disk-1/{self.cmip6_outdir}"
         if os.path.exists(self.outdir):
             os.makedirs(self.outdir, exist_ok=True)
-
+            
         self.selected_depth = 0
         self.models = {}
-
-        # Define the range of wavelengths that constitue the different parts of the spectrum.
+        
+        # Define the range of wavelengths that constitue the different parts of the spectrum. 
         self.start_index_uv = len(np.arange(200, 200, 10))
         self.end_index_uv = len(np.arange(200, 410, 10))
         self.start_index_uvb = len(np.arange(200, 280, 10))
@@ -124,7 +116,7 @@ class Config_albedo:
         self.end_index_visible = len(np.arange(200, 710, 10))
         self.start_index_nir = len(np.arange(200, 800, 10))
         self.end_index_nir = len(np.arange(200, 2500, 10))
-
+        
         self.setup_erythema_action_spectrum()
 
     def setup_logging(self):
@@ -147,16 +139,12 @@ class Config_albedo:
         self.beta_w = wl["b_w(λ)"].values
         self.alpha_wc = wl["a_wc(λ)"].values
         self.solar_energy = wl["E(λ)"].values
-
-        self.fractions_shortwave_uv = self.solar_energy[
-            self.start_index_uv : self.end_index_uv
-        ]
+      
+        self.fractions_shortwave_uv = self.solar_energy[self.start_index_uv:self.end_index_uv]
         self.fractions_shortwave_vis = self.solar_energy[
-            self.start_index_visible : self.end_index_visible
+            self.start_index_visible:self.end_index_visible
         ]
-        self.fractions_shortwave_nir = self.solar_energy[
-            self.start_index_nir : self.end_index_nir
-        ]
+        self.fractions_shortwave_nir = self.solar_energy[self.start_index_nir:self.end_index_nir]
 
         logging.info(
             "[CMIP6_config] Energy fraction UV ({} to {}): {:3.3f}".format(
@@ -233,7 +221,7 @@ class Config_albedo:
         logging.info(
             "[CMIP6_config] Calculated erythema action spectrum for wavelengths 290-400 at 10 nm increment"
         )
-
+      
         return o3_abs_interp, wavelengths
 
     def setup_absorption_chl(self):
