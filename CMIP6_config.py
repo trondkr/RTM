@@ -1,10 +1,8 @@
 import logging
-import os
-
 import gcsfs
 import numpy as np
 import pandas as pd
-
+import os
 
 class Config_albedo:
     """
@@ -26,7 +24,7 @@ class Config_albedo:
         # "UKESM1-0-LL": ["r1i1p1f2","r2i1p1f2","r3i1p1f2","r4i1p1f2","r8i1p1f2"]
         # "MPI-ESM1-2-HR": ["r1i1p1f1","r2i1p1f1"]
 
-        self.experiment_ids = ["ssp245"] #,"ssp585"]
+        self.experiment_ids = ["ssp585"] #,"ssp585"]
         self.source_id = None
         self.member_id = None
         
@@ -59,7 +57,7 @@ class Config_albedo:
         
         self.bias_correct_ghi = True
         self.bias_correct_file = "bias_correct/ghi_deltas.nc"
-        self.sensitivity_run = True
+        self.sensitivity_run = False
         self.dset_dict = {}
         self.start_date = "1979-01-01"
         self.end_date = "2099-12-16"
@@ -78,7 +76,7 @@ class Config_albedo:
         self.perform_light_calculations = True
 
         self.cmip6_netcdf_dir = "light"
-        self.cmip6_outdir = "light"
+        self.cmip6_outdir = "light/nfiles"
         if self.sensitivity_run:
             self.cmip6_outdir = "light_sensitivity"
         if os.path.exists(self.cmip6_outdir):

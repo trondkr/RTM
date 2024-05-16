@@ -1,24 +1,22 @@
-import base64
-import hashlib
-import logging
-import os
-import time
 from datetime import datetime
-
-import cftime
-import gcsfs
-import numpy as np
-import pandas as pd
-import texttable
+import logging
 import xarray as xr
-import xesmf as xe
-from google.cloud import storage
+import cftime
+import numpy as np
 from xmip.preprocessing import combined_preprocessing
-
-import CMIP6_config
 import CMIP6_model
+import CMIP6_config
 import CMIP6_regrid
-
+import xesmf as xe
+import os
+import texttable
+import pandas as pd
+from google.cloud import storage
+import logging
+import gcsfs
+import hashlib
+import time
+import base64
 
 class CMIP6_IO:
 

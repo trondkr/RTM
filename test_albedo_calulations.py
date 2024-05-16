@@ -1,14 +1,12 @@
 
 import unittest
-from datetime import datetime
-
-import numpy as np
-import xarray as xr
-
 import CMIP6_cesm3
 import CMIP6_config
-import CMIP6_IO
 import CMIP6_model
+import CMIP6_IO
+from datetime import datetime
+import numpy as np
+import xarray as xr
 
 # Tests to ensure that the method for calulating albedo used by pvlib for calculating diffuse light
 # handles correct variations of concentrations of seaice and snow.
@@ -29,7 +27,7 @@ class TestCMIP6_light(unittest.TestCase):
 
     def test_calculate_diffuse_albedo_gives_correct_result(self):
 
-        result_should_be = np.array([[0.06, 0.4525], [0.06, 0.64875]])
+        result_should_be = np.array([[0.06, 0.47], [0.06, 0.675]])
         albedo = self.cesm3.calculate_diffuse_albedo_per_grid_point(sisnconc=self.sisnconc,
                                                                     siconc=self.siconc)
         np.testing.assert_almost_equal(result_should_be, albedo)

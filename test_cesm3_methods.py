@@ -1,9 +1,7 @@
-import numpy as np
 import pytest
+import numpy as np
 import xarray as xr
-
 from CMIP6_cesm3 import CMIP6_cesm3
-
 
 class TestCMIP6_cesm3:
     def setup_class(self):

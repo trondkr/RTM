@@ -1,9 +1,7 @@
 import logging
 from typing import Tuple
-
 import numpy as np
 import xarray as xr
-
 from CMIP6_config import Config_albedo
 
 
@@ -210,7 +208,7 @@ class CMIP6_cesm3():
       #  per = (total_ice / ice_thickness.size) * 100.
 
      #   logging.info("[CMIP6_cesm3] Sea-ice attenuation ranges from {:3.3f} to {:3.3f}".format(np.nanmin(attenuation),
-                                                                                       np.nanmax(attenuation)))
+        #                                                                               np.nanmax(attenuation)))
      #   logging.info("[CMIP6_cesm3] Mean {} SW {:3.2f} in ice covered cells".format(spectrum, np.nanmean(dr_final)))
      #   logging.info("[CMIP6_cesm3] Percentage of grid point ice cover {}".format(per))
      #   logging.info("[CMIP6_cesm3] Mean ice thickness {:3.2f}".format(np.nanmean(ice_thickness)))
@@ -238,6 +236,7 @@ class CMIP6_cesm3():
 
         # Calculate the shortwave radiation per wavelength for UV
         scale_factor = 40.  # (/Wm-2)
+        
         for wavelength_i, d in enumerate(wavelengths):
             # Calculate the effect of ozone on attenuation
             uvi_ozone = self.effect_of_ozone_on_uv_at_wavelength(direct_sw_uv[wavelength_i, :, :],

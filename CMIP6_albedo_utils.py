@@ -1,5 +1,6 @@
+from numba import jit
+from numba import vectorize, float64
 import numpy as np
-from numba import float64, jit, vectorize
 
 
 # Following Roland Seferian, equation 3

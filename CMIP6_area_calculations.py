@@ -2,11 +2,10 @@ from datetime import datetime
 
 import iris
 import numpy as np
-import pandas as pd
 import xarray as xr
 from cartopy.util import add_cyclic_point
 from scipy import stats
-
+import pandas as pd
 
 def calc_trend(xarr: xr.DataArray):
     # getting shapes

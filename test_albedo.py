@@ -1,26 +1,20 @@
 import unittest
-from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser
+import CMIP6_light
+import CMIP6_config
+import CMIP6_model
+import CMIP6_IO
 from datetime import datetime
-
 import numpy as np
 import xarray as xr
-
-import CMIP6_config
-import CMIP6_IO
-import CMIP6_light
-import CMIP6_model
+from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser
+from argparse import Namespace
 
 # Unittest for ``CMIP6_light` setup
 
 class TestCMIP6_light(unittest.TestCase):
     def setUp(self):
 
-        parser = ArgumentParser(formatter_class=ArgumentDefaultsHelpFormatter)
-        args = parser.parse_args("-m 'MPI-ESM1-2-LR'", "-i 'r4i1p1f1'")
-
-
-
-        self.cmip6 = CMIP6_light.CMIP6_light(args=args)
+        self.cmip6 = CMIP6_light.CMIP6_light(Namespace(source_id="MPI-ESM1-2-LR", member_id="r4i1p1f1"))
         self.cmip6_model=CMIP6_model.CMIP6_MODEL(name="test")
         self.cmip6_IO = CMIP6_IO.CMIP6_IO()
         self.query_string = "source_id=='ACCESS-ESM1-5'and table_id=='Amon' and grid_label=='gn' \

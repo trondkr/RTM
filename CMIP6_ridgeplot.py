@@ -1,4 +1,3 @@
-import calendar
 import logging
 import os
 from datetime import datetime
@@ -8,6 +7,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import xarray as xr
+import calendar
 
 plt.style.use("mpl15")
 

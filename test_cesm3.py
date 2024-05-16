@@ -1,9 +1,7 @@
-import logging
 import unittest
-
-import numpy as np
-
 import CMIP6_cesm3
+import numpy as np
+import logging
 
 
 class MyCMIP6cesm3(unittest.TestCase):
