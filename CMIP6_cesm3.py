@@ -9,7 +9,7 @@ from CMIP6_config import Config_albedo
 # The albedo and absorbed/transmitted flux parameterizations for
 # snow over ice, bare ice and ponded ice.
 # Methods applied from cesm3 online code :
-# http://www.cesm.ucar.edu/models/cesm1.2/cesm/cesmBbrowser/html_code/cice/ice_shortwave.F90.html#COMPUTE_ALBEDOS
+# https://www2.cesm.ucar.edu/models/cesm1.0/cesm/cesmBbrowser/html_code/cice/ice_constants.F90.html#ICE_CONSTANTS
 class CMIP6_cesm3():
 
     def __init__(self) -> None:
@@ -28,24 +28,30 @@ class CMIP6_cesm3():
         self.shortwave = 'cesm3'  # shortwave
         self.albedo_type = 'cesm3'  # albedo parameterization, 'default'('cesm3')
 
-    def calculate_bare_ice_albedo(self, osa, fh, albicev, ice_thickness, snow_concentration, puny):
+    def calculate_bare_ice_albedo(self, osa: np.ndarray, ice_concentration: np.ndarray, ice_thickness: np.ndarray):
         """
         Calculate the bare ice albedo based on the given parameters.
 
         Args:
             osa (float): The optical surface albedo.
-            fh (float): The fraction of fresh snow.
+            fh (float): The ice thickness relative to thickness of 0.5 m.
             albicev (float): The albedo of the ice surface.
-            ice_thickness (float): The thickness of the ice.
-            snow_concentration (float): The concentration of snow on the ice surface.
-            puny (float): The threshold for snow concentration.
+            ice_concentration (float): The concentration of the ice.
 
         Returns:
             xr.DataArray: The calculated bare ice albedo.
 
         """
-        return xr.where((ice_thickness >= 0) & (snow_concentration < puny), osa * (1 - fh) + albicev * fh, osa)
+        ahmax = 0.5
+        fhtan = np.arctan(5 * ahmax)
+        albicev = 0.52  # CCSM3 albedo parameterization (Briegleb et al. 2004) Visible ice albedo 
 
+        # Bare ice, thickness dependence. When values are less than  0.5 then this function (fh)
+        # takes effect. This gives an asymptotic function that is 0 for 0 ice and 1 for full ice thickness
+        fh = np.where((np.arctan(ice_thickness * 5.0) / fhtan) >= 1.0, 1.0, np.arctan(ice_thickness * 5.0) / fhtan)
+        return np.where(ice_thickness > 0.01, osa * (1 - fh) + fh * albicev, osa)
+     
+       
     def calculate_temperature_dependence(self, air_temp, Td, Tp, dalb_mlt):
         """
         Args:
@@ -64,11 +70,14 @@ class CMIP6_cesm3():
             2.5
 
         """
-        air_temp = xr.where(air_temp > Td, Td, air_temp)
-        air_temp = xr.where(air_temp < Tp, Tp, air_temp)
-        return dalb_mlt * (air_temp - Tp)
+        air_temp = np.where(air_temp > Td, Td, air_temp)
+        air_temp = np.where(air_temp < Tp, Tp, air_temp)
 
-    def apply_melt_conditions(self, ice_concentration, ice_thickness, snow_concentration, snow_thickness, albo_dr,
+        deltaTs = air_temp
+
+        return dalb_mlt * deltaTs
+    
+    def apply_melt_conditions(self, ice_concentration, ice_thickness, albo_dr,
                               albo_melt):
         """
         Applies melt conditions based on the given parameters.
@@ -76,18 +85,33 @@ class CMIP6_cesm3():
         Args:
             ice_concentration (float): The concentration of ice.
             ice_thickness (float): The thickness of ice.
-            snow_concentration (float): The concentration of snow.
-            snow_thickness (float): The thickness of snow.
             albo_dr (xarray.DataArray): The albedo for non-melting conditions.
             albo_melt (xarray.DataArray): The albedo for melting conditions.
 
         Returns:
             xarray.DataArray: The resulting albedo based on the melt conditions.
         """
-        return xr.where(
-            (ice_concentration > 0) & (ice_thickness > 0.1) & (snow_concentration < 0.01) & (snow_thickness < 0.01),
+
+        return np.where(
+            (ice_concentration > 0.01) & (ice_thickness > 0.1),
             albo_melt, albo_dr)
 
+    def calculate_snow_albedo(self, snow_concentration: np.ndarray, albo_dr: np.ndarray) -> np.ndarray:
+        """
+        Calculate the albedo based on snow concentration.
+
+        Parameters:
+        - snow_concentration: xarray.DataArray representing the snow concentration.
+        - albo_dr: xarray.DataArray representing the direct albedo.
+        - albsnowv: xarray.DataArray representing the snow albedo.
+
+        Returns:
+        - xarray.DataArray: The calculated albedo.
+        """
+        albsnowv =  0.65 # CCSM3 albedo parameterization (Briegleb et al. 2004) Visible snow albedo
+ 
+        return np.where(snow_concentration > 0.01, albo_dr * (1 - snow_concentration) + snow_concentration * albsnowv, albo_dr)
+        
     # http://www.cesm.ucar.edu/models/cesm1.2/cesm/cesmBbrowser/html_code/cice/ice_shortwave.F90.html#COMPUTE_ALBEDOS
     def direct_and_diffuse_albedo_from_snow_and_ice(self,
                                                     osa: np.ndarray,
@@ -109,29 +133,17 @@ class CMIP6_cesm3():
             An ndarray representing the direct and diffuse albedo from the snow and ice.
 
         """
-        ahmax = 0.5
-        dalb_mlt = -0.075
+        dalb_mlt = -0.075 # Bjork et al. 2013
 
-        # http://www.cesm.ucar.edu/models/cesm3.0/csim/UsersGuide/ice_usrdoc/node22.html
         # Ebert, Elizabeth E., and Judith A. Curry. 1993. “An Intermediate One‐dimensional Thermodynamic Sea Ice
         # Model for Investigating Ice‐atmosphere Interactions.” Journal of Geophysical Research 98 (C6): 10085–109.
-        albsnowv = 0.98  # Visible snow albedo (cesm3) https://www2.cesm.ucar.edu/models/ccsm2.0/csim/SciGuide/ice_scidoc.pdf
-        albicev = 0.78  # Visible ice albedo (cesm3)
-
-        snowpatch = 0.02  # https://journals.ametsoc.org/jcli/article/26/4/1355/34253/The-Sensitivity-of-the-Arctic-Ocean-Sea-Ice
-        puny = 1.0e-11
-
-        Td = 0.15
-        Tp = -1.0  # Melting of ice range goes from -1 to 0
-        dalb_mltv = -0.1
-
-        # snow albedo - al(albedo)v/i(visual/near-infrared)dr/df(direct/diffuse)ni/ns(ice/snow)
-        fhtan = np.arctan(5 * ahmax)
-
-        # Bare ice, thickness dependence. When values are less than  0.5 then this function (fh)
-        # takes effect. This gives an asymptotic function that is 0 for 0 ice and 1 for full ice thickness
-        fh = np.where((np.arctan(ice_thickness * 5.0) / fhtan) >= 1.0, 1.0, np.arctan(ice_thickness * 5.0) / fhtan)
-
+        # Albedo for ice and snow taken from Marsland, S.J., H.Haak, J.H.Jungclaus, M.Latif, and F.Röske.
+        # 2003. “The Max-Planck-Institute Global Ocean/Sea Ice Model with Orthogonal Curvilinear Coordinates.”
+        # Ocean Modelling 5 (2): 91–127.
+    
+        Td =  0.15
+        Tp = 0.0  # Melting of ice range goes from -1 to 0
+      
         # Set the ice albedo where we don't have open ocean albedo. This is for thick ice
         # and the values are modified according to thickness and melting ponds further down.
         # Björk, Göran, Christian Stranne, and Karin Borenäs. 2013.
@@ -139,20 +151,35 @@ class CMIP6_cesm3():
         # Albedo Parameterization.” Journal of Climate 26 (4): 1355–70.
 
         # Fraction of pure snow on ice and the albedo
-        fs = snow_concentration / (snow_concentration + snowpatch)
-        albo_dr = xr.where(snow_concentration > 0, osa * (1 - fs) + fs * albsnowv, osa)
-
-        # Fraction of bare ice and the albedo
-        albo_dr = self.calculate_bare_ice_albedo(albo_dr, fh, albicev, ice_thickness, snow_concentration, puny)
-
-        # Calculate the relative melting conditions
+        # https://app.paperpile.com/view/?id=dec506ed-9c3d-494d-ad37-c06d01d38127
+        # Bjork et al. 2013
+        # The code for fs will produce two line plots, clearly showing how fs and albo_dr change with increasing snow concentration. 
+        # The fs plot will show a rapid increase from 0 to 1, while the albo_dr plot will show a gradual increase from the initial 
+        # value of osa towards albsnowv as snow concentration increases.
+        
+        # Sea ice albedo
+        # Fraction of bare ice and the albedo. For each grid cell the fraction of bare ice albedo vs open water 
+        # is calculated based on the ice concentration. The fraction of bare ice is then used to calculate the average 
+        # albedo of the cell which combines open water and bare ice albedo.
+        albo_dr_ice = self.calculate_bare_ice_albedo(osa, ice_concentration, ice_thickness)
+        albo_dr = np.where(albo_dr_ice > 0.01, albo_dr_ice, osa)
+        
+        # Snow on ice albedo
+        # Account for the effect of snow on the albedo using the snow concentration as the weight between ice, 
+        # open water, and snow covered grid cells.
+        albo_dr_snow = self.calculate_snow_albedo(snow_concentration, albo_dr)
+        albo_dr = np.where(albo_dr_snow > 0.01, albo_dr_snow, albo_dr)
+             
+        # Melt ponds on ice and snow
+        # Calculate the effect of melt ponds
         albo_melt = albo_dr + self.calculate_temperature_dependence(air_temp, Td, Tp, dalb_mlt)
 
         # Calculate the impact of meltponds on snow and ice and impacts on albedo
-        albo_dr = self.apply_melt_conditions(ice_concentration, ice_thickness, snow_concentration, snow_thickness,
+        albo_dr = self.apply_melt_conditions(ice_concentration, ice_thickness,
                                              albo_dr, albo_melt)
+      
         # Sanity check
-        albo_dr = xr.where(albo_dr < 0.05, osa, albo_dr)
+        albo_dr = np.where(albo_dr < 0.05, osa, albo_dr)
 
         # Return the albedo
         return albo_dr
@@ -172,15 +199,15 @@ class CMIP6_cesm3():
         #logging.info(f"[CMIP6_cesm3] Mean ice thickness {np.nanmean(snow_thickness):3.2f}")
         
         return dr * np.exp(snow_attenuation * (-snow_thickness))
-
+            
     def calc_ice_attenuation(self, spectrum: str, dr: np.ndarray, ice_thickness: np.ndarray):
         """
-        This method splits the total incoming UV or VIS light into its wavelength components defined by the
+        This method splits the total incoming UV, UV-B, UV-A, and VIS light into its wavelength components defined by the
         relative energy within each wavelength this is done by calculating the total sum of all wavelengths within
         the spectrum bands and then dividing the wavelength fractions to the total.
 
-        :param spectrum: UV or VIS
-        :param dr: The UV or VIS fraction of total incoming solar radiation
+        :param spectrum: UV, UVB, UVA, or VIS
+        :param dr: The UV, UVB, UVA, or VIS fraction of total incoming solar radiation
         :param ice_thickness: ice thickness on 2D array
         :return: Total irradiance after absorption through ice has been removed
         """
@@ -189,6 +216,14 @@ class CMIP6_cesm3():
         if spectrum == "uv":
             start_index = self.config.start_index_uv
             end_index = self.config.end_index_uv
+            
+        elif spectrum == "uvb":
+            start_index = self.config.start_index_uvb
+            end_index = self.config.end_index_uvb
+        
+        elif spectrum == "uva":
+            start_index = self.config.start_index_uva
+            end_index = self.config.end_index_uva
 
         elif spectrum == "vis":
             start_index = self.config.start_index_visible
@@ -207,12 +242,11 @@ class CMIP6_cesm3():
       #  total_ice = np.count_nonzero(np.where(ice_thickness > 0))
       #  per = (total_ice / ice_thickness.size) * 100.
 
-     #   logging.info("[CMIP6_cesm3] Sea-ice attenuation ranges from {:3.3f} to {:3.3f}".format(np.nanmin(attenuation),
-        #                                                                               np.nanmax(attenuation)))
-     #   logging.info("[CMIP6_cesm3] Mean {} SW {:3.2f} in ice covered cells".format(spectrum, np.nanmean(dr_final)))
+       # logging.info("[CMIP6_cesm3] Sea-ice attenuation ranges from {:3.3f} to {:3.3f}".format(np.nanmin(attenuation),
+    #                                                                                   np.nanmax(attenuation)))
+      #  logging.info("[CMIP6_cesm3] Mean {} SW {:3.2f} in ice covered cells".format(spectrum, np.nanmean(dr_final)))
      #   logging.info("[CMIP6_cesm3] Percentage of grid point ice cover {}".format(per))
-     #   logging.info("[CMIP6_cesm3] Mean ice thickness {:3.2f}".format(np.nanmean(ice_thickness)))
-
+       # logging.info("[CMIP6_cesm3] Mean ice thickness {:3.2f}".format(np.nanmean(ice_thickness)))
         return dr_final
 
     def effect_of_ozone_on_uv_at_wavelength(self, dr, ozone, wavelength_i):
@@ -244,7 +278,7 @@ class CMIP6_cesm3():
             # Weight per wavelength based on the erythema spectrum
             uvi_wave[wavelength_i, :, :] = uvi_ozone * self.config.erythema_spectrum[wavelength_i]
 
-        return np.squeeze(np.trapz(y=uvi_wave,
+        return np.squeeze(np.trapezoid(y=uvi_wave,
                                    x=wavelengths, axis=0) * scale_factor)
 
     #   return np.sum(uvi_wave, axis=0) * scale_factor
@@ -264,11 +298,8 @@ class CMIP6_cesm3():
         # Before calling this method you need to initialize CMIP6_cesm3 with the OSA albedo array from the
         # wavelength band of interest:
         # wavelength_band_name:
-        # OSA_uv, OSA_vis, OSA_nir, OSA_full
-        # For OSA_uv and OSA_vis we just use the output of alvdfn and alvdrn as identical  but with different fraction
-        # of energy component in total energy.
-        # is_ = ice-snow
-
+        # uv, uvb, uva, or vis
+      
         # Effect of snow and ice
         # Albedo from snow and ice - direct where sea ice concentration is above zero
         sw_ice_ocean = (direct_sw + diffuse_sw) * (1.0 - osa)
@@ -280,13 +311,13 @@ class CMIP6_cesm3():
                                                      sw_ice_ocean)  
         
         # The wavelength dependent effect of ice on attenuation
-        sw_attenuation_corrected_for_snow_and_ice = np.where(ice_thickness > 0,
+        sw_attenuation_corrected_for_snow_and_ice = np.where(ice_thickness > 0.01,
                                                              self.calc_ice_attenuation(spectrum,
                                                                                        sw_attenuation_corrected_for_snow,
                                                                                        ice_thickness),
                                                              sw_attenuation_corrected_for_snow)
 
-        if spectrum == "uv":
+        if spectrum in ["uv", "uvb", "uva"]:
             return sw_attenuation_corrected_for_snow_and_ice
 
         # Account for the chlorophyll abundance and effect on attenuation of visible light
@@ -308,22 +339,22 @@ class CMIP6_cesm3():
         :param depth: we use a constant depth of 0.1 m unless otherwise stated
         :return: Visible solar radiation reaching 0.1 m into the water column past ice, snow and chlorophyll
         """
-        kg2mg = 1.e6
+        kg2mg = 1e6
         # Divide total incoming irradiance on number of wavelength segments,
         # then iterate the absorption effect for each wavelength and calculate total
         # irradiance absorbed by chl.
-        #  dr_wave = np.zeros((len(self.config.fractions_shortwave_vis), len(dr[:, 0]), len(dr[0, :])))
-        #  for i, d in enumerate(dr_wave):
-        #      dr_wave[i, :, :] = dr[:, :] * (
-        #                  self.config.fractions_shortwave_vis[i] / np.sum(self.config.fractions_shortwave_vis))
-
+        
         logging.debug(
             f"[CMIP6_cesm3] {len(self.config.fractions_shortwave_vis)} segments to integrate for effect of wavelength on attenuation by chl")
 
         # Convert the units of chlorophyll to mgm-3
+        
         chl = chl * kg2mg
         dr_chl_integrated = np.zeros(np.shape(dr))
-
+         
+        assert np.nanmin(chl) >= 0, f"Chlorophyll values need to be positive not: {np.nanmin(chl)}"
+        assert np.nanmax(chl) < 100, f"Chlorophyll values need to be in mg/m3 not: {np.nanmax(chl)}" 
+        
         # Integrate over all wavelengths and calculate total absorption and
         # return the final light values
         assert self.chl_abs_wavelength[1] - self.chl_abs_wavelength[
@@ -335,25 +366,3 @@ class CMIP6_cesm3():
                                                        dr_chl_integrated[i_wave, :, :])
 
         return dr_chl_integrated
-
-    def calculate_albedo_in_mixed_snow_ice_grid_cell(self, sisnconc, siconc, albicev, albsnowv):
-        return (1. - siconc) * 0.06 + siconc * ((1. - sisnconc) * albicev + sisnconc * albsnowv)
-
-    def calculate_diffuse_albedo_per_grid_point(self, sisnconc: np.ndarray,
-                                                siconc: np.ndarray) -> np.ndarray:
-        """
-        Routine for  getting a crude estimate of the albedo based on ocean, snow, and ice values.
-        The result is used by pvlib to calculate the  initial diffuse irradiance.
-        :param sisnconc:
-        :param siconc:
-        :return: albedo (preliminary version used for pvlib)
-        """
-        albicev = 0.78  # Visible ice albedo (cesm3)
-        albsnowv = 0.98  # Visible snow albedo (cesm3)
-
-        albedo = np.zeros(np.shape(sisnconc)) + 0.06
-        ice_alb = np.where(siconc > 0,
-                           self.calculate_albedo_in_mixed_snow_ice_grid_cell(sisnconc, siconc, albicev, albsnowv),
-                           albedo)
-        albedo[~np.isnan(ice_alb)] = ice_alb[~np.isnan(ice_alb)]
-        return albedo

@@ -277,11 +277,15 @@ class CMIP6_ridgeplot:
             else:
                 # Calculate the relative change for a period relative to start period (1993-2020)
                 df = max_df_dict[label]
+                
                 if var_name not in ["uvb_mean","par_mean","uv_mean","uva_mean"]:
                     clim[:, i] = np.squeeze(np.array(df.values)) - clim[:, 0]
                 else:
                     clim[:, i] = (np.squeeze(np.array(df.values)) - clim[:, 0])/clim[:, 0] * 100.0
-
+                    if var_name in ["par_mean"]:
+                        clim[:, i] = np.where((np.array(df.values) - clim[:, 0]) < 0.1, 0.0, clim[:, i])
+                    
+                        
         clim = np.where(abs(clim) > 1e3, np.nan, clim)
         month_labels = [calendar.month_name[i] for i in range(1, 13)]  # labels for y-axis
 
@@ -310,7 +314,7 @@ class CMIP6_ridgeplot:
             vmax=0.8
         elif var_name in ["par_mean"]:
             vmin=0
-            vmax=100
+            vmax=200
             annot_labels = applyall(clim)
             fontsize=7
             cmap=sns.color_palette("rocket_r", as_cmap=True)
@@ -378,13 +382,17 @@ class CMIP6_ridgeplot:
             applyall = np.vectorize(convert_to_string)
             annot_labels = applyall(clim)
             fontsize=7
-            vmin=-10
-            vmax=10
+            vmin=0
+            vmax=150
             cmap=sns.color_palette("rocket_r", as_cmap=True)
         else:
             cmap=sns.color_palette("rocket_r", as_cmap=True)
         with sns.axes_style("white"):
-            sns.heatmap(clim, square=True,
+            
+            plt.clf()
+            
+            sns.heatmap(clim, 
+                        square=True,
                         cmap=cmap,
                         xticklabels=labels,
                         vmin=vmin, vmax=vmax,

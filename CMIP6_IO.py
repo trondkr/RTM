@@ -140,15 +140,14 @@ class CMIP6_IO:
             if storage.Blob(bucket=self.bucket, name=netcdf_filename).exists(self.storage_client):
                 ds = self.open_dataset_on_gs(netcdf_filename, decode_times=True)
                 # Extract the time period of interest
-                print(source_id, variable_id)
-                
                 ds = ds.sel(time=slice(config.start_date, config.end_date),y=slice(config.min_lat, config.max_lat))
                 
         
-                logging.info("[CMIP6_IO] {} => NetCDF: Extracted {} range from {} to {} for {}".format(source_id,
+                logging.info("[CMIP6_IO] {} => NetCDF: Extracted {} time from {} to {} for {}".format(source_id,
                                                                                                 variable_id,
                                                                                                 ds["time"].values[0],
                                                                                                 ds["time"].values[-1],current_experiment_id))
+          
               
                 # Save the info to model object
                 if not member_id in model_object.member_ids:
@@ -221,7 +220,7 @@ class CMIP6_IO:
                 if isinstance(ds_proj, xr.Dataset) and isinstance(ds_hist, xr.Dataset):
                     # Concatenate the historical and projections datasets
                     ds = xr.concat([ds_hist, ds_proj], dim="time")
-
+                    print(f"Found variable {variable_id}")
                     if not ds.indexes["time"].dtype in ["datetime64[ns]"]:
                         start_date = datetime.fromisoformat(config.start_date)
                         end_date = datetime.fromisoformat(config.end_date)
@@ -306,10 +305,10 @@ class CMIP6_IO:
                     self.dataset_into_model_dictionary(config.member_id, variable_id,
                                                         dset_processed,
                                                         model_object)
-
+               
                 if collection_of_variables!=config.variable_ids:
-                    missing = [x for x in config.variable_ids if not x in collection_of_variables or collection_of_variables.remove(x)]        
-                    logging.error(f"[CMIP6_IO] Error - unable to find some variable {missing}")
+                    missing = [x for x in config.variable_ids if not x in collection_of_variables]        
+                    logging.error(f"[CMIP6_IO] Error - Still need to find variable {missing}")
                 else:
                     missing=[]
                 if len(missing)==0:
@@ -318,7 +317,8 @@ class CMIP6_IO:
                     self.models.append(model_object)
                     logging.info("[CMIP6_IO] Stored {} variables for model {}".format(len(model_object.ocean_vars),
                                                                                     model_object.name))
-
+        if not len(missing)==0:
+            logging.error(f"[CMIP6_IO] Error - Unable to find variable(s) {missing}")
                 
     def dataset_into_model_dictionary(self,
                                       member_id: str,
@@ -343,7 +343,7 @@ class CMIP6_IO:
         mapper = config.fs.get_mapper(df_sub.zstore.values[-1])
         logging.debug("[CMIP6_IO] df_sub: {}".format(df_sub))
 
-        ds = xr.open_zarr(mapper, consolidated=True, mask_and_scale=True)
+        ds = xr.open_zarr(mapper, consolidated=True) #, mask_and_scale=True)
 
         # print("Time encoding: {} - {}".format(ds.indexes['time'], ds.indexes['time'].dtype))
         if not ds.indexes["time"].dtype in ["datetime64[ns]", "object"]:
@@ -389,8 +389,8 @@ class CMIP6_IO:
 
     def extract_dataset_and_save_to_netcdf(self, model_obj, config: CMIP6_config.Config_albedo, current_experiment_id):
 
-        if os.path.exists(config.cmip6_outdir) is False:
-            os.mkdir(config.cmip6_outdir)
+        if os.path.exists(config.outdir) is False:
+            os.mkdir(config.outdir)
         #  ds_out_amon = xe.util.grid_global(2, 2)
         ds_out_amon = xe.util.grid_2d(config.min_lon,
                                       config.max_lon, 2,
@@ -439,10 +439,18 @@ class CMIP6_IO:
                                          interpolation_method=config.interp)
                    
             if config.write_CMIP6_to_file:
-                out_dir = "{}/{}/{}".format(config.cmip6_outdir, current_experiment_id, model_obj.name)
+                out_dir = "{}/{}/{}".format(config.outdir, current_experiment_id, model_obj.name)
                 if not os.path.exists(out_dir):
                     os.makedirs(out_dir)
-                outfile = "{}/{}/{}/CMIP6_{}_{}_{}_{}.nc".format(config.cmip6_outdir,
+                outfile = "{}/{}/{}/CMIP6_{}_{}_{}_{}.nc".format(config.outdir,
+                                                                 current_experiment_id,
+                                                                 model_obj.name,
+                                                                 model_obj.name,
+                                                                 model_obj.current_member_id,
+                                                                 current_experiment_id,
+                                                                 key)
+                
+                outfile_gcs = "{}/{}/{}/CMIP6_{}_{}_{}_{}.nc".format(config.cmip6_outdir,
                                                                  current_experiment_id,
                                                                  model_obj.name,
                                                                  model_obj.name,
@@ -456,7 +464,7 @@ class CMIP6_IO:
                 #    ds = ds_trans.to_dataset()
                 self.write_netcdf(out.chunk({'time': -1}), out_file=outfile)
                
-                self.upload_to_gcs(outfile)
+                self.upload_to_gcs(outfile, fname_gcs=outfile_gcs)
                 logging.info(f"[CMIP6_light] wrote variable {key} to file")
 
     def create_grid(self, ds, var_name, step):
@@ -466,7 +474,7 @@ class CMIP6_IO:
         #
         # We want the number of grid points to be a subset of the full resolution in
         # the GLORYS grid so we get the total count of values.
-        print("ds before", ds)
+       
         lats = ds.lat.values
         counts_lat = int(len(lats) / step)
         lats_new = np.linspace(

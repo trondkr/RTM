@@ -97,7 +97,7 @@ class MyCMIP6cesm3(unittest.TestCase):
             ice_thickness,
             air_temp
         )
-
+        print("here 2", albo_dr)
         np.testing.assert_almost_equal(
             albo_dr, np.ones(np.shape(self.snow_thickness)) * 0.78, decimal=2
         )

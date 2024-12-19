@@ -30,7 +30,7 @@ class CMIP6_albedo_plot():
        # time_labels = times.strftime("%H:%M %p")
 
        # plt.legend(labels)
-        plt.savefig("spectral_test_{}.png".format(latitude))
+        plt.savefig(f"spectral_test_{latitude}.png")
 
     def create_plots(self, lon, lat, model_object, sisnconc=None, sisnthick=None, sithick=None, siconc=None, \
                      clt=None, chl=None, rads=None, irradiance_water=None, wind=None, OSA=None, OSA_UV=None, \
@@ -44,6 +44,8 @@ class CMIP6_albedo_plot():
         if clt is not None: self.create_plot(clt, lon[0, :], lat[:, 0], "clt", model_object, regional=False)
         if sithick is not None: self.create_plot(sithick,lon[0,:],lat[:,0],"sithick",model_object,regional=False)
         if direct_sw is not None: self.create_plot(direct_sw, lon[0, :], lat[:, 0], "direct_sw", model_object,
+                                                   regional=False, plotname_postfix=plotname_postfix)
+        if irradiance_water is not None: self.create_plot(irradiance_water, lon[0, :], lat[:, 0], "irradiance_water", model_object,
                                                    regional=False, plotname_postfix=plotname_postfix)
         if uvi is not None: self.create_plot(uvi, lon[0, :], lat[:, 0], "UVI", model_object,
                                                    regional=False, plotname_postfix=plotname_postfix)
@@ -68,7 +70,7 @@ class CMIP6_albedo_plot():
       #  self.create_plot(OSA_UV[:, :, 1], lon[0, :], lat[:, 0], "OSA_UV_DIFFUSE", model_object, regional=True)
 
         # self.create_plot(irradiance_water, lon[0, :], lat[:, 0], "irradiance_water", model_object, regional=True)
-        if albedo is not None: self.create_plot(albedo, lon[0, :], lat[:, 0], "albedo", model_object, nlevels=[0.02,0.025, 0.03, 0.035, 0.04,0.045, 0.05, 0.06], regional=True)
+        if albedo is not None: self.create_plot(albedo, lon[0, :], lat[:, 0], "albedo", model_object, nlevels=[0.02,0.03, 0.04, 0.05, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1, 0.2,0.5,0.8,1.0 ], regional=True)
 
     def create_streamplot(self, indata_u, indata_v, uv, lon, lat, name, nlevels=None):
         # Make data cyclic around dateline
@@ -136,7 +138,9 @@ class CMIP6_albedo_plot():
         plt.interactive(False)
         import matplotlib.path as mpath
 
-        logging.info("[CMIP6_albedo_plot] Plotting variable {} ({})".format(name,np.shape(indata)))
+        logging.info(
+            f"[CMIP6_albedo_plot] Plotting variable {name} ({np.shape(indata)})"
+        )
         plt.clf()
         proj = ccrs.NorthPolarStereo()
         ax = plt.axes(projection=proj)
@@ -166,10 +170,9 @@ class CMIP6_albedo_plot():
                                  transform=ccrs.PlateCarree(),
                                  cmap=cmap, locator=ticker.LogLocator(subs=range(1, 5)), extend='both')
             else:
-                print(plotname_postfix)
                 if plotname_postfix is not None and "OSA_BROADBAND" in plotname_postfix:
                         nlevels_low = np.arange(0.02, 0.08, 0.005)
-                        nlevels_high = np.asarray([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9])
+                        nlevels_high = np.asarray([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
                         nlevels = np.concatenate([nlevels_low, nlevels_high])
                         cm = self.level_colormap(nlevels, cmap=plt.cm.get_cmap("plasma"))
                         cs = ax.contourf(lon, lat, indata_cyclic, nlevels, transform=ccrs.PlateCarree(), cmap=cm,

@@ -2,17 +2,21 @@ import datetime
 import logging
 import os
 from calendar import monthrange
+from re import T
 from typing import List, Any
 from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser
 from dask.distributed import Client
-    
+from pathlib import Path
+
 # Computational modules
 import cftime
 import dask
 import netCDF4
 import numpy as np
 import pandas as pd
+from platformdirs import user_cache_dir
 import pvlib
+#import pvlib.forecast
 import texttable
 import xarray as xr
 import xesmf as xe
@@ -26,6 +30,7 @@ import CMIP6_config
 import CMIP6_date_tools
 import CMIP6_regrid
 
+from numpy.typing import NDArray 
 
 class CMIP6_light:
     def __init__(self, args):
@@ -33,7 +38,8 @@ class CMIP6_light:
         self.config = CMIP6_config.Config_albedo()
         self.config.source_id = args.source_id
         self.config.member_id = args.member_id
-
+        self.show_table_of_info=False
+        
         if not self.config.use_local_CMIP6_files:
             self.config.read_cmip6_repository()
         self.cmip6_models: List[Any] = []
@@ -82,17 +88,18 @@ class CMIP6_light:
         # Solar Energy Materials and Solar Cells, Volume 157, 2016, Pages 913-922,
         np.seterr(divide="ignore", invalid="ignore")
         rho = I_diff_clouds / I_ghi_clouds
-
-        I_diff_s = np.trapz(
+     
+        I_diff_s = np.trapezoid(
             y=spectra["poa_sky_diffuse"], x=spectra["wavelength"], axis=0
-        ) + np.trapz(y=spectra["poa_ground_diffuse"], x=spectra["wavelength"], axis=0)
-        I_dir_s = np.trapz(y=spectra["poa_direct"], x=spectra["wavelength"], axis=0)
-        I_glob_s = np.trapz(y=spectra["poa_global"], x=spectra["wavelength"], axis=0)
+        ) + np.trapezoid(y=spectra["poa_ground_diffuse"], x=spectra["wavelength"], axis=0)
+        
+        I_dir_s = np.trapezoid(y=spectra["poa_direct"], x=spectra["wavelength"], axis=0)
+        I_glob_s = np.trapezoid(y=spectra["poa_global"], x=spectra["wavelength"], axis=0)
 
         rho_spectra = I_diff_s / I_glob_s
 
         N_rho = (rho - rho_spectra) / (1 - rho_spectra)
-
+  
         # Direct light. Equation 6 Ernst et al. 2016
         F_diff_s = (
             spectra["poa_sky_diffuse"][:, :] + spectra["poa_ground_diffuse"][:, :]
@@ -109,6 +116,48 @@ class CMIP6_light:
         F_diff = s_diff * I_diff_clouds[None, :]
         return F_dir, F_diff
 
+    def calculate_transmittance(self, cloud_cover):
+        """
+        Calculates the transmittance based on cloud covers using the equation from the paper:
+        Srivastava, Ankur, Jose F. Rodriguez, Patricia M. Saco, Nikul Kumari, and Omer Yetemen. 2021.
+        “Global Analysis of Atmospheric Transmissivity Using Cloud Cover, Aridity and Flux Network Datasets.”
+        Remote Sensing 13 (9): 1716.
+
+        Args:
+            cloud_covers (np.array): numpy array of cloud cover for longitude band (fixed latitude)
+            Cloud covers is assumed to be in fractions and converted to percentage multiplying by 100.
+
+        Returns:
+            np.array: array containing the calculated transmittance values
+        """
+        offset = 0.75
+        return (1.0 - cloud_cover) * offset
+    
+    def calculate_irradiance_with_clouds(self, zenith, cloud_covers, dni_extra):
+        transmittance = self.calculate_transmittance(cloud_covers)
+        return pvlib.irradiance.campbell_norman(
+            zenith, transmittance, dni_extra=dni_extra
+        )
+    def fix_bad_values(self, zenith, ghi: np.ndarray, dni = None):
+        # Fix potential problems with the calculated values
+        if dni is not None:
+            bad_values = (
+                (zenith > 87)
+                | (ghi < 0)
+                | (dni < 0)
+                | (np.isnan(ghi))
+            )
+            dni = np.where(bad_values, 0, dni)
+        else:
+            bad_values = (
+                (zenith > 87)
+                | (ghi < 0)
+                | (np.isnan(ghi))
+            )
+            
+        ghi = np.where(bad_values, 0, ghi)
+        return ghi, dni 
+        
     def radiation(
         self,
         cloud_covers,
@@ -119,8 +168,7 @@ class CMIP6_light:
         albedo,
         ozone,
         altitude=0.0,
-        bias_delta=None,
-    ) -> np.array:
+    ) -> NDArray:
         """Returns an array of calculated diffuse and direct light for each longitude index
         around the globe (fixed latitude). Output has the shape:  [len(wavelengths), 361, 3] and
         the indexes refer to:
@@ -141,7 +189,7 @@ class CMIP6_light:
         """
         wavelengths = np.arange(200, 2700, 10)
         results = np.zeros((len(wavelengths), np.shape(cloud_covers)[0], 3))
-
+        
         # Some calculations are done only on Greenwhich meridian line as they are identical around the globe at the
         # same latitude. For that reason longitude is set to Greenwhich meridian and do not change. The only reason
         # to use longitude would be to have the local sun position for given time but since we calculate position at
@@ -154,37 +202,34 @@ class CMIP6_light:
 
         solpos = pvlib.solarposition.get_solarposition(
             ctime, latitude, longitude, altitude=altitude
-        )  # , temperature=temp)
+        )
 
         airmass_relative = pvlib.atmosphere.get_relative_airmass(
-            solpos["apparent_zenith"].to_numpy(), model="kasten1966"
+            solpos["apparent_zenith"].to_numpy(), model="kastenyoung1989"
         )
         pressure = pvlib.atmosphere.alt2pres(altitude)
-        apparent_zenith = (
-            np.ones((np.shape(cloud_covers))) * solpos["apparent_zenith"].to_numpy()
-        )
-        zenith = np.ones((np.shape(cloud_covers))) * solpos["zenith"].to_numpy()
-        azimuth = np.ones((np.shape(cloud_covers))) * solpos["azimuth"].to_numpy()
-        surface_azimuth = np.ones((np.shape(cloud_covers))) * system["surface_azimuth"]
+        apparent_zenith = solpos["apparent_zenith"].to_numpy()
+        zenith = solpos["zenith"].to_numpy()
+        azimuth = solpos["azimuth"].to_numpy()
+        surface_azimuth = system["surface_azimuth"]
 
-        # Always we use zero tilt when working with pvlib and incoming
-        # irradiance on a horizontal plane flat on earth
-        surface_tilt = np.zeros((np.shape(cloud_covers)))
-
-        # cloud cover in fraction units here. this is used in campbell_norman functions
-        # TODO: Use the implemented function instead :
-        # pvlib.forecast.GFS.cloud_cover_to_irradiance_campbell_norman
+        shape = np.shape(cloud_covers)
+        apparent_zenith = np.broadcast_to(apparent_zenith, shape)
+        zenith = np.broadcast_to(zenith, shape)
+        azimuth = np.broadcast_to(azimuth, shape)
+        surface_azimuth = np.broadcast_to(surface_azimuth, shape)
+        surface_tilt = np.zeros(shape)
 
         aoi = pvlib.irradiance.aoi(
             surface_tilt, surface_azimuth, apparent_zenith, azimuth
         )
 
         # Fixed atmospheric components used from pvlib example
-        tau500 = np.ones((np.shape(cloud_covers))) * 0.1
+        tau500 = np.ones((shape)) * 0.1
 
         # day of year is an int64index array so access first item
         day_of_year = ctime.dayofyear
-        day_of_year = np.ones((np.shape(cloud_covers))) * day_of_year[0]
+        day_of_year = np.ones((shape)) * day_of_year[0]
 
         """
         The radiation reaching the earth's surface can be represented in a number of different ways. Global Horizontal 
@@ -199,7 +244,7 @@ class CMIP6_light:
             apparent_zenith=apparent_zenith,
             aoi=aoi,
             surface_tilt=surface_tilt,
-            ground_albedo=albedo,
+            ground_albedo=albedo*0.0,
             surface_pressure=pressure,
             relative_airmass=airmass_relative,
             precipitable_water=water_vapor_content,
@@ -207,20 +252,21 @@ class CMIP6_light:
             aerosol_turbidity_500nm=tau500,
             dayofyear=day_of_year,
         )
+        dni_extra = pvlib.irradiance.get_extra_radiation(day_of_year) 
 
-        dni_extra = pvlib.irradiance.get_extra_radiation(day_of_year)
-        transmittance = (1.0 - cloud_covers) * 0.75
-        irrads_clouds = pvlib.irradiance.campbell_norman(
-            apparent_zenith, transmittance, dni_extra=dni_extra
-        )
+        # Select methodology to calculate irradiance with clouds
+        use_CAMPBELL_irradiance = False
+        use_DISC_irradiance = not use_CAMPBELL_irradiance
 
-        if bias_delta is not None:
-            delta = bias_delta
-        else:
-            delta = 0.0
-        ghi_cloud_corrected = irrads_clouds["ghi"] + delta
+        if use_CAMPBELL_irradiance:        
+            irrad = self.calculate_irradiance_with_clouds(zenith, cloud_covers, dni_extra)
+            ghi=irrad["ghi"]
+            dni=irrad["dni"]
+            dhi=irrad["dhi"]
+            ghi, dni = self.fix_bad_values(zenith, ghi, dni=dni)
 
-        """
+        elif use_DISC_irradiance:
+            """
             Estimate Direct Normal Irradiance from Global Horizontal Irradiance
             using the DISC model.
 
@@ -229,67 +275,62 @@ class CMIP6_light:
             and direct clearness indices.
 
             The pvlib implementation limits the clearness index to 1.
-        """
+            """
+            transmittance = self.calculate_transmittance(cloud_covers)
+            irrads_clouds = pvlib.irradiance.campbell_norman(
+                apparent_zenith, transmittance, dni_extra = dni_extra
+            ) 
+            
+            ghi = irrads_clouds["ghi"]
+            ghi, dni = self.fix_bad_values(zenith, ghi, dni=None)
+           
+            kt = pvlib.irradiance.clearness_index(
+                ghi,
+                zenith,
+                dni_extra,
+                min_cos_zenith=0.065,
+                max_clearness_index=0.9,
+            )
 
-        # Correct the clear sky for clouds
-        # ghi_cloud_corrected = (0.35 + (1 - 0.35) * (1 - cloud_covers)) * ghi_cloud_corrected
-        # ghi_cloud_corrected = ghi_cloud_corrected # + bias_delta.values
+         #   am = pvlib.atmosphere.get_absolute_airmass(airmass_relative, pressure)
 
-        ghi_cloud_corrected = np.where(
-            ghi_cloud_corrected < 0, 0.0, ghi_cloud_corrected
-        )
-
-        bad_values = np.isnan(ghi_cloud_corrected)
-        ghi_cloud_corrected = np.where(bad_values, 0, ghi_cloud_corrected)
-
-        kt = pvlib.irradiance.clearness_index(
-            ghi_cloud_corrected,
-            zenith,
-            dni_extra,
-            min_cos_zenith=0.065,
-            max_clearness_index=1,
-        )
-
-        am = pvlib.atmosphere.get_absolute_airmass(airmass_relative, pressure)
-
-        Kn, am = pvlib.irradiance._disc_kn(kt, am, max_airmass=12)
-        dni = Kn * dni_extra
-
-        bad_values = (
-            (zenith > 87)
-            | (ghi_cloud_corrected < 0)
-            | (dni < 0)
-            | (np.isnan(ghi_cloud_corrected))
-        )
-        dni = np.where(bad_values, 0, dni)
-        dhi = ghi_cloud_corrected - dni * np.cos(np.radians(zenith))
-
+           # Kn, am = pvlib.irradiance._disc_kn(kt, am, max_airmass=12)
+            irrads = pvlib.irradiance.disc(ghi, zenith, day_of_year, max_airmass=12)
+           # dni = Kn * dni_extra
+            dni = irrads["dni"]
+        
+           # dni = pvlib.irradiance.dni(ghi, dni, zenith, clearsky_dni=None)
+            
+            dhi = ghi - dni * np.cos(np.radians(zenith))
+            ghi, dni = self.fix_bad_values(zenith, ghi, dni=dni)
+            
         # Convert the irradiance to a plane with tilt zero horizontal to the earth. This is done applying tilt=0 to POA
         # calculations using the output from campbell_norman. The POA calculations include calculating sky and ground
         # diffuse light where specific models can be selected (we use default). Here, albedo is used to calculate
-        # ground diffuse irradiance
+        # ground diffuse irradiance.
 
         POA_irradiance_clouds = pvlib.irradiance.get_total_irradiance(
             surface_tilt=surface_tilt,
             surface_azimuth=surface_azimuth,
-            dni=dni,
-            ghi=ghi_cloud_corrected,
+            dni=dni, 
+            ghi=ghi,
             dhi=dhi,
             solar_zenith=apparent_zenith,
             solar_azimuth=azimuth,
             albedo=albedo,
-            model="klucher",
-            model_perez="allsitescomposite1990",
-        )
+            dni_extra=dni_extra, 
+            model="haydavies")
 
+       
         # Account for cloud opacity on the spectral radiation
-        F_dir, F_diff = self.cloud_opacity_factor(
-            POA_irradiance_clouds["poa_diffuse"],
+        F_dir, F_diff = self.cloud_opacity_factor(POA_irradiance_clouds["poa_diffuse"]\
+                                                    +POA_irradiance_clouds["poa_ground_diffuse"]\
+                                                    +POA_irradiance_clouds["poa_sky_diffuse"],
             POA_irradiance_clouds["poa_direct"],
             POA_irradiance_clouds["poa_global"],
             spectra,
         )
-
+    
         # Do the linear interpolation
         for lon_index in range(len(F_dir[0, :])):
             interp_fdir = np.interp(
@@ -300,102 +341,13 @@ class CMIP6_light:
             )
             results[:, lon_index, 0] = np.squeeze(interp_fdir)
             results[:, lon_index, 1] = np.squeeze(interp_fdiff)
-        results[0, :, 2] = ghi_cloud_corrected
+        
+        results[0, :, 2] = ghi
 
         # return direct, diffuse, and ghi cloud affected radiation at wavelengths
         return results
 
-    def season_mean(self, ds, calendar="standard"):
-        # Make a DataArray of season/year groups
-
-        year_season = xr.DataArray(
-            ds.time.to_index().to_period(freq="Q-NOV").to_timestamp(how="E"),
-            coords=[ds.time],
-            name="year_season",
-        )
-
-        # Make a DataArray with the number of days in each month, size = len(time)
-        date_tool = CMIP6_date_tools.CMIP6_date_tools()
-        month_length = xr.DataArray(
-            date_tool.get_dpm(ds.time.to_index(), calendar=calendar),
-            coords=[ds.time],
-            name="month_length",
-        )
-        # Calculate the weights by grouping by 'time.season'
-        weights = (
-            month_length.groupby("time.season")
-            / month_length.groupby("time.season").sum()
-        )
-
-        # Test that the sum of the weights for each season is 1.0
-        np.testing.assert_allclose(
-            weights.groupby("time.season").sum().values, np.ones(4)
-        )
-
-        # Calculate the weighted average
-        return (ds * weights).groupby("time.season").sum(dim="time")
-
-    def create_chlorophyll_avg_for_year(self, year, ds_in, ds_out):
-        start_date = "{}-01-01".format(year)
-        end_date = "{}-12-31".format(year)
-        ds_chl_2020 = ds_in.sel(time=slice(start_date, end_date))  # .mean('time')
-
-        year2 = 2050
-        start_date = "{}-01-01".format(year2)
-        end_date = "{}-12-31".format(year2)
-        ds_chl_2050 = ds_in.sel(time=slice(start_date, end_date))
-        re = CMIP6_regrid.CMIP6_regrid()
-        chl2020 = re.regrid_variable("chl", ds_chl_2020, ds_out)
-        chl2050 = re.regrid_variable("chl", ds_chl_2050, ds_out)
-
-        ds_2020 = chl2020.to_dataset()
-        ds_2050 = chl2050.to_dataset()
-
-        lat = ds_2020.lat.values
-        lon = ds_2020.lon.values
-
-        weighted_average_2020 = self.season_mean(ds_2020, calendar="noleap")
-        weighted_average_2050 = self.season_mean(ds_2050, calendar="noleap")
-
-        ds_diff = (
-            100
-            * (weighted_average_2050 - weighted_average_2020)
-            / weighted_average_2020
-        )
-        chl2020 = weighted_average_2020.sel(season="MAM").chl.values
-        chl2050 = weighted_average_2050.sel(season="MAM").chl.values
-        chl2050_diff = ds_diff.sel(season="MAM").chl.values
-
-        # kg/m3 to mg/m3 multiply by 1e6
-        plotter = CMIP6_albedo_plot.CMIP6_albedo_plot()
-
-        plotter.create_plot(
-            (chl2020 * 1.0e6),
-            lon[0, :],
-            lat[:, 0],
-            "chl2020",
-            nlevels=np.arange(0, 5, 0.2),
-            regional=True,
-            logscale=True,
-        )
-        plotter.create_plot(
-            (chl2050 * 1.0e6),
-            lon[0, :],
-            lat[:, 0],
-            "chl2050",
-            nlevels=np.arange(0, 5, 0.2),
-            regional=True,
-            logscale=True,
-        )
-        plotter.create_plot(
-            chl2050_diff,
-            lon[0, :],
-            lat[:, 0],
-            "chl2050-2020",
-            nlevels=np.arange(-101, 101, 1),
-            regional=True,
-        )
-
+    
     """
     Regrid to cartesian grid:
     For any Amon related variables (wind, clouds), the resolution from CMIP6 models is less than
@@ -464,19 +416,6 @@ class CMIP6_light:
     def filter_extremes(self, df):
         return np.where(((df < -1000) | (df > 1000)), np.nan, df)
 
-    def get_linke_turbidity(self, ctime, lat, lon=0.0):
-        # Calculating the linke turbidity requires opening a h5 file which crashes dask. Therefore,
-        # we do the calculations outside of the loop and send the ready made array into the radiation
-        # function. This variable is used by inchein clearsky calculation
-        # https://meteonorm.com/assets/publications/ieashc36_report_TL_AOD_climatologies.pdf
-
-        linke_turbidity = np.zeros(len(lat[:, 0]))
-        for i in range(len(lat[:, 0])):
-            linke_turbidity[i] = pvlib.clearsky.lookup_linke_turbidity(
-                ctime, lat[i, 0], lon, interp_turbidity=False
-            )
-        return linke_turbidity
-
     def values_for_timestep(self, extracted_ds, model_object):
         lat = np.squeeze(extracted_ds["tos"].lat.values)
         lon = np.squeeze(extracted_ds["tos"].lon.values)
@@ -517,27 +456,29 @@ class CMIP6_light:
         m = len(wind[:, 0])
         n = len(wind[0, :])
 
-        """
-        table = texttable.Texttable()
-        table.set_cols_align(["c", "c", "c"])
-        table.set_cols_valign(["m", "m", "m"])
+        # Set show_table_of_info to True to print the range of data read 
+        # at each timestep (for debugging purposes)
+        if self.show_table_of_info:
+            table = texttable.Texttable()
+            table.set_cols_align(["c", "c", "c"])
+            table.set_cols_valign(["m", "m", "m"])
 
-        table.header(["Model", "Variable", "Range"])
-        table.add_rows([
-            ["", "clt", "{:3.3f} to {:3.3f}.".format(np.nanmin(clt), np.nanmax(clt))],
-            ["", "chl", "{:3.3f} to {:3.3f}.".format(np.nanmin(chl), np.nanmax(chl))],
-            ["", "prw", "{:3.3f} to {:3.3f}.".format(np.nanmin(prw), np.nanmax(prw))],
-            ["{}".format(model_object.name), "tas", "{:3.3f} to {:3.3f}.".format(np.nanmin(tas), np.nanmax(tas))],
-            ["", "uas", "{:3.3f} to {:3.3f}.".format(np.nanmin(uas), np.nanmax(uas))],
-            ["", "vas", "{:3.3f} to {:3.3f}.".format(np.nanmin(vas), np.nanmax(vas))],
-            ["", "siconc", "{:3.3f} to {:3.3f}.".format(np.nanmin(siconc), np.nanmax(siconc))],
-            ["", "sithick", "{:3.3f} to {:3.3f}.".format(np.nanmin(sithick), np.nanmax(sithick))],
-            ["", "sisnconc", "{:3.3f} to {:3.3f}.".format(np.nanmin(sisnconc), np.nanmax(sisnconc))],
-            ["", "sisnthick", "{:3.3f} to {:3.3f}.".format(np.nanmin(sisnthick), np.nanmax(sisnthick))]
-        ])
-        table.set_cols_width([30, 20, 30])
-        print(table.draw() + "\n")
-        """
+            table.header(["Model", "Variable", "Range"])
+            table.add_rows([
+                ["", "clt", "{:3.3f} to {:3.3f}".format(np.nanmin(clt), np.nanmax(clt))],
+                ["", "chl (mg/m3)", "{:3.3f} to {:3.3f}".format(np.nanmin(chl)*1e6, np.nanmax(chl)*1e6)],
+                ["", "prw", "{:3.3f} to {:3.3f}".format(np.nanmin(prw), np.nanmax(prw))],
+                ["{}".format(model_object.name), "tas", "{:3.3f} to {:3.3f}".format(np.nanmin(tas), np.nanmax(tas))],
+                ["", "uas", "{:3.3f} to {:3.3f}".format(np.nanmin(uas), np.nanmax(uas))],
+                ["", "vas", "{:3.3f} to {:3.3f}".format(np.nanmin(vas), np.nanmax(vas))],
+                ["", "wind", "{:3.3f} to {:3.3f}".format(np.nanmin(wind), np.nanmax(wind))],
+                ["", "siconc", "{:3.3f} to {:3.3f}".format(np.nanmin(siconc), np.nanmax(siconc))],
+                ["", "sithick", "{:3.3f} to {:3.3f}".format(np.nanmin(sithick), np.nanmax(sithick))],
+                ["", "sisnconc", "{:3.3f} to {:3.3f}".format(np.nanmin(sisnconc), np.nanmax(sisnconc))],
+                ["", "sisnthick", "{:3.3f} to {:3.3f}".format(np.nanmin(sisnthick), np.nanmax(sisnthick))]
+            ])
+            table.set_cols_width([30, 20, 30])
+            print(table.draw() + "\n")
 
         return (
             wind,
@@ -559,48 +500,29 @@ class CMIP6_light:
         self,
         ctime,
         pv_system,
-        clt: np.ndarray,
-        prw: np.ndarray,
-        ozone: np.ndarray,
-        direct_OSA: np.ndarray,
-        lat: np.ndarray,
+        clt: NDArray,
+        prw: NDArray,
+        ozone: NDArray,
+        direct_OSA: NDArray,
+        lat: NDArray,
         m: int,
-        n: int,
-        bias_delta: np.ndarray = None,
-    ) -> (np.ndarray, np.ndarray, np.ndarray):
+        n: int
+    ) -> (NDArray[float], NDArray[float], NDArray[float]):
+        
         wavelengths = np.arange(200, 2700, 10)
-
-        if self.config.bias_correct_ghi:
-            bias = np.zeros(
-                np.shape(bias_delta["ghi"][ctime.month[0] - 1, :, :])
-            ) + np.nanmean(np.squeeze(bias_delta["ghi"][ctime.month[0] - 1, :, :]))
-            
-            calc_radiation = [
-                dask.delayed(self.radiation)(
-                    clt[j, :],
-                    prw[j, :],
-                    lat[j, 0],
-                    ctime,
-                    pv_system,
-                    direct_OSA[j, :],
-                    ozone[j, :],
-                    bias_delta=bias[j, :],
-                )
-                for j in range(m)
-            ]
-        else:
-            calc_radiation = [
-                dask.delayed(self.radiation)(
-                    clt[j, :],
-                    prw[j, :],
-                    lat[j, 0],
-                    ctime,
-                    pv_system,
-                    direct_OSA[j, :],
-                    ozone[j, :],
-                )
-                for j in range(m)
-            ]
+        
+        calc_radiation = [
+            dask.delayed(self.radiation)(
+                clt[j, :],
+                prw[j, :],
+                lat[j, 0],
+                ctime,
+                pv_system,
+                direct_OSA[j, :],
+                ozone[j, :],
+            )
+            for j in range(m)
+        ]
 
         # https://github.com/dask/dask/issues/5464
         rad = dask.compute(calc_radiation)
@@ -608,7 +530,7 @@ class CMIP6_light:
 
         # Transpose to get order: wavelengths, lat, lon, elements
         rads = np.transpose(rads, (1, 0, 2, 3))
-
+       
         direct_sw = np.squeeze(rads[:, :, :, 0])
         diffuse_sw = np.squeeze(rads[:, :, :, 1])
         ghi = np.squeeze(rads[0, :, :, 2])
@@ -616,8 +538,16 @@ class CMIP6_light:
         return direct_sw, diffuse_sw, ghi
 
     def get_ozone_dataset(self, current_experiment_id: str) -> xr.Dataset:
-        # Method that reads the total ozone column from input4MPI dataset (Micahela Heggelin)
-        # and regrid to consistent 1x1 degree dataset.
+        """
+        Retrieves the total ozone column dataset for a given experiment ID and regrids it 
+        to a consistent 1x1 degree dataset.
+
+        Parameters:
+        - current_experiment_id (str): The ID of the current experiment.
+
+        Returns:
+        - xr.Dataset: The regridded total ozone column dataset.
+        """
         logging.info("[CMIP6_light] Regridding ozone data to standard grid")
         io = CMIP6_IO.CMIP6_IO()
 
@@ -651,14 +581,22 @@ class CMIP6_light:
         return toz_ds
 
     def convert_dobson_units_to_atm_cm(self, ozone):
-        # One Dobson Unit is the number of molecules of ozone that would be required to create a layer
-        # of pure ozone 0.01 millimeters thick at a temperature of 0 degrees Celsius and a pressure of 1 atmosphere
-        # (the air pressure at the surface of the Earth). Expressed another way, a column of air with an ozone
-        # concentration of 1 Dobson Unit would contain about 2.69x1016 ozone molecules for every
-        # square centimeter of area at the base of the column. Over the Earth’s surface, the ozone layer’s
-        # average thickness is about 300 Dobson Units or a layer that is 3 millimeters thick.
-        #
-        # https://ozonewatch.gsfc.nasa.gov/facts/dobson_SH.html
+        """
+        Converts ozone concentration from Dobson Units to atmospheric centimeters.
+
+        One Dobson Unit is the number of molecules of ozone that would be required to create a layer
+        of pure ozone 0.01 millimeters thick at a temperature of 0 degrees Celsius and a pressure of 1 atmosphere
+        (the air pressure at the surface of the Earth). Expressed another way, a column of air with an ozone
+        concentration of 1 Dobson Unit would contain about 2.69x10^16 ozone molecules for every
+        square centimeter of area at the base of the column. Over the Earth’s surface, the ozone layer’s
+        average thickness is about 300 Dobson Units or a layer that is 3 millimeters thick.
+
+        Args:
+            ozone (numpy.ndarray): Array of ozone concentrations in Dobson Units.
+
+        Returns:
+            numpy.ndarray: Array of ozone concentrations in atmospheric centimeters.
+        """
         ozone = np.where(ozone == 0, np.nan, ozone)
         assert np.nanmax(ozone) <= 700
         assert np.nanmin(ozone) > 100
@@ -675,15 +613,9 @@ class CMIP6_light:
 
         toz_ds = self.get_ozone_dataset(current_experiment_id)
         time_counter = 0
-
-        if self.config.bias_correct_ghi:
-            bias_delta = xr.open_dataset(self.config.bias_correct_file)
-            bias_delta = bias_delta.assign_coords(lon=(bias_delta.lon % 360)).sortby(
-                "lon"
-            )
-
         start_at_noon = False
-        for selected_time in range(0, len(times.values)):
+        
+        for selected_time in range(len(times.values)):
             sel_time = times.values[selected_time]
             if isinstance(sel_time, cftime._cftime.DatetimeNoLeap):
                 sel_time = datetime.datetime(
@@ -719,7 +651,7 @@ class CMIP6_light:
 
             # num_days = monthrange(sel_time.year, sel_time.month)[1]
             for day in [15]:  # range(num_days):
-                for hour_of_day in range(0, 23, 4):
+                for hour_of_day in range(0, 24, 6):
                     if hour_of_day == 12:
                         start_at_noon = True
                     if start_at_noon is True:
@@ -729,20 +661,18 @@ class CMIP6_light:
                             day=day + 1,
                             hour=hour_of_day,
                         )
-
-                        logging.info(
-                            f"[CMIP6_light] Running {model_object.current_time} model {model_object.name} scenario {current_experiment_id}"
-                        )
-
                         ctime, pv_system = self.setup_pv_system(
-                            model_object.current_time
-                        )
-                        calc_zenith = [
-                            dask.delayed(self.calculate_zenith)(lat[j, 0], ctime)
-                            for j in range(m)
-                        ]
-                        zenith = dask.compute(calc_zenith)
-                        zeniths = np.asarray(zenith).reshape(m)
+                                model_object.current_time
+                            )
+                         
+                        if hour_of_day == 12:
+                            calc_zenith = [
+                                dask.delayed(self.calculate_zenith)(lat[j, 0], ctime)
+                                for j in range(m)
+                            ]
+                        
+                            zenith = dask.compute(calc_zenith)
+                            zeniths = np.asarray(zenith).reshape(m)
                         
                         for scenario in self.config.scenarios:
                             if scenario == "no_chl": 
@@ -762,76 +692,96 @@ class CMIP6_light:
                             else: 
                                 ice_scale = 1.0
                             if scenario == "no_meltpond": 
-                                tas_scale = -2. # Celsius
+                                tas_scale = -20. # Celsius
                             else: 
                                 tas_scale = 0.0
                             if scenario == "snow_sensitivity": 
                                 snow_attenuation = 5.9 # Lebrun et al. 2023
                             else: 
-                                # A value of 20 m-1 was used in the original (Budgell) ROMS sea ice module (see line 711 in bulk_flux.F).
-                                snow_attenuation = 20.0 # ROMS ice code bulk_flux.f90
+                                # A value of 20 m-1 was used in the original (Budgell) ROMS sea ice 
+                                # module (see line 711 in bulk_flux.F).
+                                snow_attenuation = 20.0 # ROMS ice code bulk_flux.f90  
 
-                            logging.info("[CMIP6_light] Running scenario: {}".format(scenario))
+                            logging.info(f"[CMIP6_light] {scenario}: Running {model_object.current_time} model {model_object.name} scenario {current_experiment_id}")
                             # Calculate OSA for each grid point (this is without the effect of sea ice and snow)
-                            if hour_of_day == 12:
-                                zr = [
-                                    CMIP6_albedo_utils.calculate_OSA(
-                                        zeniths[i],
-                                        wind[i, j] * wind_scale,
-                                        chl[i, j] * chl_scale,
-                                        self.config.wavelengths,
-                                        self.config.refractive_indexes,
-                                        self.config.alpha_chl,
-                                        self.config.alpha_w,
-                                        self.config.beta_w,
-                                        self.config.alpha_wc,
-                                        self.config.solar_energy,
-                                    )
-                                    for i in range(m)
-                                    for j in range(n)
-                                ]
+                            
+                            zr = [
+                                CMIP6_albedo_utils.calculate_OSA(
+                                    zeniths[i],
+                                    wind[i, j] * wind_scale,
+                                    chl[i, j] * chl_scale,
+                                    self.config.wavelengths,
+                                    self.config.refractive_indexes,
+                                    self.config.alpha_chl,
+                                    self.config.alpha_w,
+                                    self.config.beta_w,
+                                    self.config.alpha_wc,
+                                    self.config.solar_energy,
+                                    scenario,
+                                )
+                                for i in range(m)
+                                for j in range(n)
+                            ]
 
-                                res = np.squeeze(np.asarray(dask.compute(zr)))
-                                OSA = res[:, 0, :].reshape((m, n, 2))
-
-                                direct_OSA = np.squeeze(OSA[:, :, 0])
-                                diffuse_OSA = np.squeeze(OSA[:, :, 1])
-
+                            res = np.squeeze(np.asarray(dask.compute(zr)))
+                            OSA = res[:, 0, :].reshape((m, n, 2))
+                            
+                            direct_OSA = np.squeeze(OSA[:, :, 0])
+                            diffuse_OSA = np.squeeze(OSA[:, :, 1])
+                            # Estimated values for average albedo from snow and ice prior to real calculations 
+                            # later which are used for attenuation into water column through ice and snow.
+                            direct_OSA = np.where(siconc > 0.01, 0.52, direct_OSA)
+                            direct_OSA = np.where(sisnconc > 0.01, 0.65, direct_OSA)
+                           # logging.info(f"Mean OSA {np.nanmean(direct_OSA)} between {np.nanmin(direct_OSA)} and {np.nanmax(direct_OSA)}")
+                            
+                            direct_OSA_ice_snow = self.CMIP6_cesm3.direct_and_diffuse_albedo_from_snow_and_ice(
+                                direct_OSA, 
+                                sisnconc*ice_scale, 
+                                sisnthick*ice_scale, 
+                                siconc*ice_scale, 
+                                sithick*ice_scale, 
+                                tas+tas_scale)
+                          #  logging.info(f"Mean direct_OSA_ice_snow {np.nanmean(direct_OSA_ice_snow)} between {np.nanmin(direct_OSA_ice_snow)} and {np.nanmax(direct_OSA_ice_snow)}")
+                            
                             # Calculate radiation calculation uses the direct_OSA to calculate the diffuse radiation
                             # Effect of albedo is added in `compute_surface_solar_for_specific_wavelength_band`
-
                             direct_sw, diffuse_sw, ghi = self.calculate_radiation(
                                 ctime,
                                 pv_system,
                                 clt*cloud_scale,
                                 prw,
                                 ozone,
-                                direct_OSA,
+                                direct_OSA_ice_snow,
                                 lat,
                                 m,
-                                n,
-                                bias_delta,
+                                n
                             )
-
+                            
+                            # scale
+                            direct_sw = direct_sw*1.17
+                            diffuse_sw = direct_sw*1.17
+                            ghi = ghi*1.17
                             wavelengths = np.arange(200, 2700, 10)
-
+                         #   logging.info(f"Mean radiation {np.nanmean(direct_sw)} between {np.nanmin(direct_sw)} and {np.nanmax(direct_sw)}")
+                            
+                            
                             dr_sw_broadband = np.squeeze(
-                                np.trapz(y=direct_sw, x=wavelengths, axis=0)
+                                np.trapezoid(y=direct_sw, x=wavelengths, axis=0)
                             )
                             df_sw_broadband = np.squeeze(
-                                np.trapz(y=diffuse_sw, x=wavelengths, axis=0)
+                                np.trapezoid(y=diffuse_sw, x=wavelengths, axis=0)
                             )
 
                             # Scale the diffuse and direct albedo to get total broadband albedo for use going forward
                             # Equation 17 in Sefarian et al. 2018
-                            if hour_of_day == 12:
-                                OSA = (
-                                    direct_OSA * dr_sw_broadband
-                                    + diffuse_OSA * df_sw_broadband
-                                ) / (dr_sw_broadband + df_sw_broadband)
+                            
+                            OSA = (
+                                direct_OSA * dr_sw_broadband
+                                + diffuse_OSA * df_sw_broadband
+                            ) / (dr_sw_broadband + df_sw_broadband)
 
-                                OSA = np.where(np.isnan(OSA), np.nanmean(OSA), OSA)
-
+                            OSA = np.where(np.isnan(OSA), 0.06, OSA)
+                            
                             # Add the effect of snow and ice on broadband albedo
                             OSA_ice_ocean = self.CMIP6_cesm3.direct_and_diffuse_albedo_from_snow_and_ice(
                                 OSA, 
@@ -848,170 +798,114 @@ class CMIP6_light:
                             logging.debug(
                                 f"[CMIP6_light] OSA range {np.nanmin(OSA_ice_ocean)} to {np.nanmax(OSA_ice_ocean)} (scenario: {scenario})"
                             )
-
-                            if scenario == "no_osa":
-                                OSA_ice_ocean = np.where(
-                                    OSA_ice_ocean < 0.08, 0.06, OSA_ice_ocean
-                                )
-
+                            
                             # Calculate shortwave radiation entering the ocean after accounting for the effect of snow
-                            # and ice to the direct and diffuse albedos and for attenuation (no scattering).
-                            # The final product adds diffuse and direct
-                            # light for the spectrum in question (vis or uv).
-                            sw_vis_attenuation_corrected_for_snow_ice_chl = self.CMIP6_cesm3.compute_surface_solar_for_specific_wavelength_band(
-                                OSA_ice_ocean,
-                                direct_sw[
-                                    self.config.start_index_visible : self.config.end_index_visible,
-                                    :,
-                                    :,
-                                ],
-                                diffuse_sw[
-                                    self.config.start_index_visible : self.config.end_index_visible,
-                                    :,
-                                    :,
-                                ],
-                                chl * chl_scale,
-                                sisnthick*ice_scale,
-                                sithick*ice_scale,
-                                snow_attenuation,
-                                spectrum = "vis",
-                            )                                                               
+                            # and ice on the direct and diffuse albedos and for attenuation (no scattering). The effect of
+                            # snow and ice on the albedo is calculated in the `compute_surface_solar_for_specific_wavelength_band`
+                            # for different bands of the spectrum.
+                            
+                            def compute_surface_solar_for_band(start_index, end_index, spectrum):
+                                return self.CMIP6_cesm3.compute_surface_solar_for_specific_wavelength_band(
+                                    OSA_ice_ocean,
+                                    direct_sw[start_index:end_index, :, :],
+                                    diffuse_sw[start_index:end_index, :, :],
+                                    chl * chl_scale,
+                                    sisnthick * ice_scale,
+                                    sithick * ice_scale,
+                                    snow_attenuation,
+                                    spectrum=spectrum,
+                                )
 
-                            sw_uv_attenuation_corrected_for_snow_ice_chl = self.CMIP6_cesm3.compute_surface_solar_for_specific_wavelength_band(
-                                OSA_ice_ocean,
-                                direct_sw[
-                                    self.config.start_index_uv : self.config.end_index_uv,
-                                    :,
-                                    :,
-                                ],
-                                diffuse_sw[
-                                    self.config.start_index_uv : self.config.end_index_uv,
-                                    :,
-                                    :,
-                                ],
-                                chl * chl_scale,
-                                sisnthick*ice_scale,
-                                sithick*ice_scale,
-                                snow_attenuation,
-                                spectrum = "uv",
+                            sw_vis_attenuation_corrected_for_snow_ice_chl = compute_surface_solar_for_band(
+                                self.config.start_index_visible, self.config.end_index_visible, "vis"
                             )
-                            # Integrate values across wavelengths according to which variable we are considering
+                            sw_uv_attenuation_corrected_for_snow_ice_chl = compute_surface_solar_for_band(
+                                self.config.start_index_uv, self.config.end_index_uv, "uv"
+                            )
+                            sw_uva_attenuation_corrected_for_snow_ice_chl = compute_surface_solar_for_band(
+                                self.config.start_index_uva, self.config.end_index_uva, "uva"
+                            )
+                            sw_uvb_attenuation_corrected_for_snow_ice_chl = compute_surface_solar_for_band(
+                                self.config.start_index_uvb, self.config.end_index_uvb, "uvb"
+                            )
+
+                            # Integrate values across wavelengths
                             par = np.squeeze(
-                                np.trapz(
+                                np.trapezoid(
                                     y=sw_vis_attenuation_corrected_for_snow_ice_chl,
-                                    x=wavelengths[
-                                        self.config.start_index_visible : self.config.end_index_visible
-                                    ],
+                                    x=wavelengths[self.config.start_index_visible:self.config.end_index_visible],
                                     axis=0,
                                 )
                             )
+                            logging.debug(
+                                f"[CMIP6_light] PAR range {np.nanmin(par)} to {np.nanmax(par)} (scenario: {scenario})"
+                            )
+
                             uv = np.squeeze(
-                                np.trapz(
+                                np.trapezoid(
                                     y=sw_uv_attenuation_corrected_for_snow_ice_chl,
-                                    x=wavelengths[
-                                        self.config.start_index_uv : self.config.end_index_uv
-                                    ],
+                                    x=wavelengths[self.config.start_index_uv:self.config.end_index_uv],
                                     axis=0,
                                 )
                             )
 
-                            sw_srf = np.squeeze(
-                                np.trapz(y=direct_sw, x=wavelengths, axis=0)
-                            ) + np.squeeze(
-                                np.trapz(y=diffuse_sw, x=wavelengths, axis=0)
-                            )
-
-                            uv_srf = np.squeeze(
-                                np.trapz(
-                                    y=direct_sw[
-                                        self.config.start_index_uv : self.config.end_index_uv
-                                    ],
-                                    x=wavelengths[
-                                        self.config.start_index_uv : self.config.end_index_uv
-                                    ],
-                                    axis=0,
-                                )
-                            ) + np.squeeze(
-                                np.trapz(
-                                    y=diffuse_sw[
-                                        self.config.start_index_uv : self.config.end_index_uv
-                                    ],
-                                    x=wavelengths[
-                                        self.config.start_index_uv : self.config.end_index_uv
-                                    ],
+                            uvb = np.squeeze(
+                                np.trapezoid(
+                                    y=sw_uvb_attenuation_corrected_for_snow_ice_chl,
+                                    x=wavelengths[self.config.start_index_uvb:self.config.end_index_uvb],
                                     axis=0,
                                 )
                             )
 
-                            uv_b = np.squeeze(
-                                np.trapz(
-                                    y=diffuse_sw[
-                                        self.config.start_index_uvb : self.config.end_index_uvb
-                                    ],
-                                    x=wavelengths[
-                                        self.config.start_index_uvb : self.config.end_index_uvb
-                                    ],
-                                    axis=0,
-                                )
-                            ) + np.squeeze(
-                                np.trapz(
-                                    y=direct_sw[
-                                        self.config.start_index_uvb : self.config.end_index_uvb
-                                    ],
-                                    x=wavelengths[
-                                        self.config.start_index_uvb : self.config.end_index_uvb
-                                    ],
+                            uva = np.squeeze(
+                                np.trapezoid(
+                                    y=sw_uva_attenuation_corrected_for_snow_ice_chl,
+                                    x=wavelengths[self.config.start_index_uva:self.config.end_index_uva],
                                     axis=0,
                                 )
                             )
 
-                            uv_a = np.squeeze(
-                                np.trapz(
-                                    y=diffuse_sw[
-                                        self.config.start_index_uva : self.config.end_index_uva
-                                    ],
-                                    x=wavelengths[
-                                        self.config.start_index_uva : self.config.end_index_uva
-                                    ],
-                                    axis=0,
-                                )
-                            ) + np.squeeze(
-                                np.trapz(
-                                    y=direct_sw[
-                                        self.config.start_index_uva : self.config.end_index_uva
-                                    ],
-                                    x=wavelengths[
-                                        self.config.start_index_uva : self.config.end_index_uva
-                                    ],
-                                    axis=0,
-                                )
-                            )
-
+                            # Calculate the UV index and UVI at surface
                             uvi = self.CMIP6_cesm3.calculate_uvi(
                                 sw_uv_attenuation_corrected_for_snow_ice_chl,
                                 ozone,
-                                wavelengths[
-                                    self.config.start_index_uv : self.config.end_index_uv
-                                ],
+                                wavelengths[self.config.start_index_uv:self.config.end_index_uv],
                             )
 
+                            uvb_srf = np.squeeze(np.trapezoid(y=direct_sw[self.config.start_index_uvb:self.config.end_index_uvb],
+                                                     x=wavelengths[self.config.start_index_uvb:self.config.end_index_uvb], axis=0)) + \
+                                 np.squeeze(np.trapezoid(y=diffuse_sw[self.config.start_index_uvb:self.config.end_index_uvb],
+                                                     x=wavelengths[self.config.start_index_uvb:self.config.end_index_uvb], axis=0))
+
                             do_plot = False
-                            if do_plot:
+                            if do_plot and hour_of_day == 12: # and sel_time.month in [1,2,3,4,5,6,7,8,9,10,11,12]:
                                 plotter = CMIP6_albedo_plot.CMIP6_albedo_plot()
+                                
                                 plotter.create_plots(
                                     lon,
                                     lat,
                                     model_object,
                                     OSA_VIS=OSA_ice_ocean,
-                                    plotname_postfix="_OSA_BROADBAND_{}".format(
-                                        scenario
-                                    ),
+                                    plotname_postfix=f"_OSA_BROADBAND_{scenario}"
                                 )
-                                """
+                            
                                 plotter.create_plots(lon, lat, model_object,
-                                                    direct_sw=par,
-                                                    plotname_postfix="_vis_{}".format(scenario))
-
+                                                    irradiance_water=par,
+                                                    plotname_postfix=f"_vis_{scenario}")
+                                
+                                plotter.create_plots(lon, lat, model_object,
+                                                    siconc=siconc,
+                                                    plotname_postfix=f"_siconc_{scenario}")
+                                plotter.create_plots(lon, lat, model_object,
+                                                    sithick=sithick,
+                                                    plotname_postfix="_sithick_{}".format(scenario))
+                                plotter.create_plots(lon, lat, model_object,
+                                                    chl=chl,
+                                                    plotname_postfix="_chl_{}".format(scenario))
+                                plotter.create_plots(lon, lat, model_object,
+                                                    sisnthick=sisnthick,
+                                                    plotname_postfix="_sithick_{}".format(scenario))
+                                """
                                 plotter.create_plots(lon, lat, model_object,
                                                     uvi=uvi,
                                                     plotname_postfix="_UVI_{}".format(scenario))
@@ -1040,24 +934,22 @@ class CMIP6_light:
                             for data_list, vari in zip(
                                 [
                                     par,
-                                    sw_srf,
                                     ghi,
-                                    uv_b,
-                                    uv_a,
+                                    uvb,
+                                    uva,
                                     uv,
-                                    uv_srf,
                                     uvi,
+                                    uvb_srf,
                                     OSA_ice_ocean,
                                 ],
                                 [
                                     "par",
-                                    "sw_srf",
                                     "ghi",
                                     "uvb",
                                     "uva",
                                     "uv",
-                                    "uv_srf",
                                     "uvi",
+                                    "uvb_srf",
                                     "osa",
                                 ],
                             ):
@@ -1068,6 +960,10 @@ class CMIP6_light:
                                     scenario,
                                     current_experiment_id,
                                 )
+                             
+                                if not os.path.exists(Path(filename).parent):
+                                    os.makedirs(os.path.dirname(Path(filename)).parent, exist_ok=True)
+                    
                                 self.save_irradiance_to_netcdf(
                                     filename,
                                     data_list,
@@ -1084,13 +980,12 @@ class CMIP6_light:
         for scenario in self.config.scenarios:
             for vari in [
                 "par",
-                "sw_srf",
                 "ghi",
                 "uvb",
                 "uva",
                 "uv",
-                "uv_srf",
                 "uvi",
+                "uvb_srf",
                 "osa",
             ]:
                 filename = self.get_filename(
@@ -1102,6 +997,8 @@ class CMIP6_light:
                 )
                 filename_gcs = filename.replace(self.config.outdir, "")
                 filename_gcs = f"{self.config.cmip6_outdir}{filename_gcs}"
+                if not os.path.exists(filename):
+                    os.makedirs(os.path.dirname(Path(filename)).parent, exist_ok=True)
                 io.upload_to_gcs(filename, fname_gcs=filename_gcs)
                 os.remove(filename)
 
@@ -1121,7 +1018,7 @@ class CMIP6_light:
           
             cdf = netCDF4.Dataset(filename, mode="w")
             cdf.title = f"RTM calculations of {vari}"
-            cdf.description = "Created for revision 2 of paper."
+            cdf.description = "Created for revision 2 of Kristiansen et al. 2024 (in review)"
 
             cdf.history = f"Created {datetime.datetime.now()}"
             cdf.link = "https://github.com/trondkr/RTM"
@@ -1216,7 +1113,7 @@ def main(args):
 
     
 if __name__ == "__main__":
-    np.warnings.filterwarnings("ignore")
+    #np.warnings.filterwarnings("ignore")
     # https://docs.dask.org/en/latest/diagnostics-distributed.html
     # https://docs.dask.org/en/latest/setup/single-distributed.html
     dask.config.set({'array.slicing.split_large_chunks': True})
@@ -1239,19 +1136,5 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
     main(args)
-    """    
-    with Client() as client:  # (n_workers=4, threads_per_worker=4, processes=True, memory_limit='15GB') as client:
-        status = client.scheduler_info()["services"]
-        assert client.status == "running"
-        logging.info("[CMIP6_light] client {}".format(client))
-        logging.info(
-            "Dask started with status at: http://localhost:{}/status".format(
-                status["dashboard"]
-            )
-        )
-        main(args)
-        client.close()
-        assert client.status == "closed"
-    """
 
     logging.info("[CMIP6_light] Execution of downscaling completed")
