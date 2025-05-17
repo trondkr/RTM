@@ -12,9 +12,9 @@ from CMIP6_config import Config_albedo
 # https://www2.cesm.ucar.edu/models/cesm1.0/cesm/cesmBbrowser/html_code/cice/ice_constants.F90.html#ICE_CONSTANTS
 class CMIP6_cesm3():
 
-    def __init__(self) -> None:
+    def __init__(self, use_gcs=False) -> None:
 
-        self.config = Config_albedo()
+        self.config = Config_albedo(use_gcs=use_gcs)
         self.config.setup_parameters()
         self.chl_abs_A, self.chl_abs_B, self.chl_abs_wavelength = self.config.setup_absorption_chl()
         self.o3_abs, self.o3_wavelength = self.config.setup_ozone_uv_spectrum()

@@ -8,18 +8,20 @@ class Config_albedo:
     """
     Class that is passed to the CMIP6 calculations containing the configuration.
     """
-    def __init__(self):
+    def __init__(self, create_forcing:bool = False, use_gcs: bool = False):
         """
         This function initialized the configuration for the CMIP6 calculations.
         """
 
         logging.info("[CMIP6_config] Defining the config file for the calculations")
+
         self.fs = gcsfs.GCSFileSystem(token="anon", access="read_only")
         self.grid_labels = ["gn"]  # Can be gr=grid rotated, or gn=grid native
-        self.experiment_ids = ["ssp245", "ssp585"] #, "ssp585"]
+        self.experiment_ids = ["ssp245"] #, "ssp585"] #, "ssp585"]
         self.source_id = None
         self.member_id = None
-        
+        self.create_forcing = create_forcing
+
         self.variable_ids = [
             "prw",
             "clt",
@@ -50,6 +52,7 @@ class Config_albedo:
       #  self.table_ids = ["Amon","Amon"]
       #  self.variable_ids = ["rsus","rsds"]
         
+        self.use_gcs = use_gcs
         self.bias_correct_ghi = False
         self.sensitivity_run = False
         if self.sensitivity_run:
@@ -69,8 +72,14 @@ class Config_albedo:
             
         # Change these to False if you want to download the CMIP6 data from the cloud
         # and write the files to disk.
-        self.use_local_CMIP6_files = True
-        self.perform_light_calculations = True
+        if self.create_forcing:
+            logging.info("[CMIP6_config] Creating forcing files")
+        else:
+            logging.info("[CMIP6_config] Running light calculations")
+        
+        print("create_forcing", "True" if self.create_forcing else "False")
+        self.use_local_CMIP6_files = False if self.create_forcing else True
+        self.perform_light_calculations = False if self.create_forcing else True
         
         if not self.use_local_CMIP6_files and not self.perform_light_calculations:
             # This is used to create the input files for the light calculations.
@@ -93,17 +102,18 @@ class Config_albedo:
         if self.write_CMIP6_to_file:
             # We want to save the entire northern hemisphere for possible use later
             # while calculations are done north of 50N
-            self.min_lat = 0
+            self.min_lat = 50
             self.start_date = "1950-01-01"
         else:
-            self.min_lat = 60
-        self.max_lat = 85
-        self.min_lon = 0
-        self.max_lon = 360
+            self.min_lat = 50
+        self.max_lat = 70
+        self.min_lon = 180
+        self.max_lon = 196
 
         # ESMF and Dask related
         self.interp = "bilinear"
         self.outdir = f"/mnt/disks/actea-disk-1/{self.cmip6_outdir}"
+        self.outdir = f"{self.cmip6_netcdf_dir}"
         if os.path.exists(self.outdir):
             os.makedirs(self.outdir, exist_ok=True)
             

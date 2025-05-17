@@ -9,6 +9,7 @@ import CMIP6_config
 import CMIP6_regrid
 import xesmf as xe
 import os
+from pathlib import Path
 import texttable
 import pandas as pd
 from google.cloud import storage
@@ -20,12 +21,16 @@ import base64
 
 class CMIP6_IO:
 
-    def __init__(self):
+    def __init__(self, use_gcs: bool = False):
         self.models = []
-        self.storage_client = storage.Client()
-        self.bucket_name = "actea-shared"
-        self.bucket = self.storage_client.bucket(self.bucket_name)
-        self.fs = gcsfs.GCSFileSystem(project="downscale")
+        self.use_gcs = use_gcs
+        
+        if self.use_gcs:
+            self.storage_client = storage.Client()
+            self.fs = gcsfs.GCSFileSystem(project="downscale")
+            self.bucket_name = "actea-shared"
+            self.bucket = self.storage_client.bucket(self.bucket_name)
+
         self.logger = logging.getLogger("CMIP6-log")
         self.logger.setLevel(logging.INFO)
 
@@ -63,7 +68,7 @@ class CMIP6_IO:
         return base64.b64encode(hash_md5.digest()).decode()
 
     def upload_to_gcs(self, fname: str, fname_gcs: str = None):
-        """ upload file to GCS.
+        """ Upload file to GCS.
 
         Method that uploads file to the GCS blob. Calculates the md5 sha
         prior to uploading which is used by GCS to ensure that
@@ -121,7 +126,7 @@ class CMIP6_IO:
         
         source_id = config.source_id
         member_id = config.member_id
-        
+
         if source_id in config.models.keys():
             model_object = config.models[source_id]
         else:
@@ -136,19 +141,21 @@ class CMIP6_IO:
                                                             config.member_id,
                                                             current_experiment_id,
                                                             variable_id)
-           
-            if storage.Blob(bucket=self.bucket, name=netcdf_filename).exists(self.storage_client):
-                ds = self.open_dataset_on_gs(netcdf_filename, decode_times=True)
-                # Extract the time period of interest
-                ds = ds.sel(time=slice(config.start_date, config.end_date),y=slice(config.min_lat, config.max_lat))
-                
         
-                logging.info("[CMIP6_IO] {} => NetCDF: Extracted {} time from {} to {} for {}".format(source_id,
-                                                                                                variable_id,
-                                                                                                ds["time"].values[0],
-                                                                                                ds["time"].values[-1],current_experiment_id))
-          
-              
+            if self.use_gcs:
+                if storage.Blob(bucket=self.bucket, name=netcdf_filename).exists(self.storage_client):
+                    ds = self.open_dataset_on_gs(netcdf_filename, decode_times=True)
+            else:
+                ds = xr.open_dataset(netcdf_filename, decode_times=True)    
+
+            if isinstance(ds, xr.Dataset):
+                # Extract the spatio-temporal period of interest
+                ds = ds.sel(time=slice(config.start_date, config.end_date),\
+                        lat=slice(config.min_lat, config.max_lat), \
+                        lon=slice(config.min_lon, config.max_lon))
+                logging.info(
+                    f'[CMIP6_IO] {source_id} => NetCDF: Extracted {variable_id} time from {ds["time"].values[0]} to {ds["time"].values[-1]} for {current_experiment_id} ')
+                      
                 # Save the info to model object
                 if not member_id in model_object.member_ids:
                     model_object.member_ids.append(member_id)
@@ -159,11 +166,11 @@ class CMIP6_IO:
                     current_vars = model_object.ocean_vars[member_id]
                     current_vars.append(variable_id)
                     model_object.ocean_vars[member_id] = current_vars
-                
+
                 self.dataset_into_model_dictionary(config.member_id, variable_id, ds, model_object)
-                
+
         self.models.append(model_object)
-    
+
         logging.info(f"[CMIP6_IO] Stored {len(model_object.ocean_vars)} variables for model {model_object.name}")
 
     def to_360day_monthly(self, ds:xr.Dataset):
@@ -220,7 +227,7 @@ class CMIP6_IO:
                 if isinstance(ds_proj, xr.Dataset) and isinstance(ds_hist, xr.Dataset):
                     # Concatenate the historical and projections datasets
                     ds = xr.concat([ds_hist, ds_proj], dim="time")
-                    print(f"Found variable {variable_id}")
+                    
                     if not ds.indexes["time"].dtype in ["datetime64[ns]"]:
                         start_date = datetime.fromisoformat(config.start_date)
                         end_date = datetime.fromisoformat(config.end_date)
@@ -229,6 +236,7 @@ class CMIP6_IO:
                         start_date = config.start_date
                         end_date = config.end_date
                     ds = xr.decode_cf(ds)
+                    
                     logging.info(
                         "[CMIP6_IO] Variable: {} and units {}".format(variable_id, ds[variable_id].units))
                     if variable_id in ["prw"]:
@@ -236,10 +244,9 @@ class CMIP6_IO:
                         # The pvlib functions takes cm so we convert values
                         ds[variable_id].values = ds[variable_id].values / 10.0
                         ds.attrs["units"] = "cm"
-                        logging.info(
-                            "[CMIP6_IO] Minimum {} and maximum {} values after converting to {} units".format(np.nanmin(ds[variable_id].values),
-                                                                                                        np.nanmax(ds[variable_id].values),
-                                                                                                        ds[variable_id].units))
+                        logging.info(f"[CMIP6_IO] Minimum {np.nanmin(ds[variable_id].values):3.3f}\
+                            and maximum {np.nanmax(ds[variable_id].values):3.3f}\
+                                values after converting to {ds[variable_id].units} units")
 
                     if variable_id in ["tas"]:
                         if ds[variable_id].units in ["K","Kelvin","kelvin"]:
@@ -308,7 +315,7 @@ class CMIP6_IO:
                
                 if collection_of_variables!=config.variable_ids:
                     missing = [x for x in config.variable_ids if not x in collection_of_variables]        
-                    logging.error(f"[CMIP6_IO] Error - Still need to find variable {missing}")
+                    logging.error(f"[CMIP6_IO] Still need to find variable {missing}")
                 else:
                     missing=[]
                 if len(missing)==0:
@@ -389,19 +396,19 @@ class CMIP6_IO:
 
     def extract_dataset_and_save_to_netcdf(self, model_obj, config: CMIP6_config.Config_albedo, current_experiment_id):
 
-        if os.path.exists(config.outdir) is False:
-            os.mkdir(config.outdir)
-        #  ds_out_amon = xe.util.grid_global(2, 2)
+        if not Path(config.outdir).exists():
+            Path(config.outdir).mkdir(parents=True, exist_ok=True)
+
         ds_out_amon = xe.util.grid_2d(config.min_lon,
                                       config.max_lon, 2,
                                       config.min_lat,
                                       config.max_lat, 2)
-        #  ds_out = xe.util.grid_global(1, 1)
+
         ds_out = xe.util.grid_2d(config.min_lon,
                                  config.max_lon, 1,
                                  config.min_lat,
                                  config.max_lat, 1)
-       
+
         re = CMIP6_regrid.CMIP6_regrid()
 
         for key in model_obj.ds_sets[model_obj.current_member_id].keys():
@@ -409,7 +416,7 @@ class CMIP6_IO:
             current_ds = model_obj.ds_sets[model_obj.current_member_id][key]  # .sel(
             #   y=slice(int(config.min_lat), int(config.max_lat)),
             #   x=slice(int(config.min_lon), int(config.max_lon)))
-            
+
             if all(item in current_ds.dims for item in ['time', 'y', 'x', 'vertex', 'bnds']):
              #   ds_trans = current_ds.chunk({'time': -1}).transpose('bnds', 'time', 'vertex', 'y', 'x')
                 ds_trans = current_ds.chunk({'time': -1}).transpose('time', 'y', 'x', 'bnds', 'vertex')
@@ -421,86 +428,76 @@ class CMIP6_IO:
                 ds_trans = current_ds.chunk({'time': -1}).transpose('time', 'y', 'x','nvertices')
             else:
                 ds_trans = current_ds.chunk({'time': -1}).transpose('bnds', 'time', 'y', 'x')
-        
-            if key in ["uas", "vas", "clt", "tas"]:
+
+            if key in ["uas", "vas", "clt", "tas", "prw"]:
                 out_amon = re.regrid_variable(key,
                                               ds_trans,
                                               ds_out_amon,
-                                              interpolation_method=config.interp) #.to_dataset()
+                                              interpolation_method=config.interp) 
+
+                ds_out = self.create_grid(ds_out, ds_trans, key, 0.25).sel(lat=slice(config.min_lat, config.max_lat), 
+                                                                lon=slice(config.min_lon, config.max_lon))
 
                 out = re.regrid_variable(key, out_amon, ds_out,
                                          interpolation_method=config.interp)
             else:
-                ds_out = self.create_grid(ds_trans, key, 1).sel(lat=slice(config.min_lat, config.max_lat), 
+                ds_out = self.create_grid(ds_out, ds_trans, key, 0.25).sel(lat=slice(config.min_lat, config.max_lat), 
                                                                 lon=slice(config.min_lon, config.max_lon))
- 
+
                 out = re.regrid_variable(key, ds_trans,
                                          ds_out,
                                          interpolation_method=config.interp)
-                   
             if config.write_CMIP6_to_file:
-                out_dir = "{}/{}/{}".format(config.outdir, current_experiment_id, model_obj.name)
-                if not os.path.exists(out_dir):
-                    os.makedirs(out_dir)
-                outfile = "{}/{}/{}/CMIP6_{}_{}_{}_{}.nc".format(config.outdir,
-                                                                 current_experiment_id,
-                                                                 model_obj.name,
-                                                                 model_obj.name,
-                                                                 model_obj.current_member_id,
-                                                                 current_experiment_id,
-                                                                 key)
-                
-                outfile_gcs = "{}/{}/{}/CMIP6_{}_{}_{}_{}.nc".format(config.cmip6_outdir,
-                                                                 current_experiment_id,
-                                                                 model_obj.name,
-                                                                 model_obj.name,
-                                                                 model_obj.current_member_id,
-                                                                 current_experiment_id,
-                                                                 key)
-                if os.path.exists(outfile): os.remove(outfile)
+                out_dir = f"{config.outdir}/{current_experiment_id}/{model_obj.name}"
+                Path(out_dir).mkdir(parents=True, exist_ok=True)
+
+                outfile = f"{config.outdir}/{current_experiment_id}/{model_obj.name}/CMIP6_{model_obj.name}_{model_obj.current_member_id}_{current_experiment_id}_{key}.nc"
+                outfile_gcs = f"{config.cmip6_outdir}/{current_experiment_id}/{model_obj.name}/CMIP6_{model_obj.name}_{model_obj.current_member_id}_{current_experiment_id}_{key}.nc"
+                if Path(outfile).exists(): 
+                    Path(outfile).unlink()
 
                 # Convert to dataset before writing to netcdf file. Writing to file downloads and concatenates all
                 # of the data and we therefore re-chunk to split the process into several using dask
                 #    ds = ds_trans.to_dataset()
                 self.write_netcdf(out.chunk({'time': -1}), out_file=outfile)
-               
-                self.upload_to_gcs(outfile, fname_gcs=outfile_gcs)
-                logging.info(f"[CMIP6_light] wrote variable {key} to file")
 
-    def create_grid(self, ds, var_name, step):
+                if config.use_gcs:
+                    # Upload to GCS
+                    self.upload_to_gcs(outfile, fname_gcs=outfile_gcs)
+
+                logging.info(f"[CMIP6_light] wrote variable {key} to file {out_dir}")
+
+    def create_grid(self, ds_out, ds_in, var_name, step, lats=None, lons=None):
         # 2. We create a grid for CMIP6 data which is a subset of the GLORYS grid resolution and an approximation to
         # # the actual CMIP6 resolution. This makes
         # the two grids compatible - a requirement from ISIMIP3BASD
         #
         # We want the number of grid points to be a subset of the full resolution in
         # the GLORYS grid so we get the total count of values.
-       
-        lats = ds.lat.values
-        counts_lat = int(len(lats) / step)
-        lats_new = np.linspace(
-            int(round(np.ceil(np.min(lats)))),
-            int(round(np.floor(np.max(lats)))),
-            counts_lat,
-            endpoint=True,
-        )
 
-        # Resolution from GLORYS file
-        lons = ds.lon.values
-        counts_lon = int(len(lons) / step)
-        # Spatial range from the CMIP6 file
-       
-        lons_new = np.linspace(
-            int(round(np.ceil(np.min(lons)))),
-            int(round(np.floor(np.max(lons)))),
-            counts_lon,
-            endpoint=True,
-        )
+        if lats is None and lons is None:
+            lats = ds_out.lat.values
+            lats_new = np.arange(
+                int(round(np.floor(np.min(lats)))),
+                int(round(np.ceil(np.max(lats))))+step,
+                step,
+            )
 
+            # Resolution from GLORYS file
+            lons = ds_out.lon.values
+            lons_new = np.arange(
+                int(round(np.floor(np.min(lons)))),
+                int(round(np.ceil(np.max(lons))))+step,
+                step,
+            )
+        else:
+            lats_new = lats
+            lons_new = lons
         # Create a DataArray void of data
         return xr.DataArray(
             name=var_name,
             coords={
-                "time": (["time"], ds.time.values),
+                "time": (["time"], ds_in.time.values),
                 "lat": (["lat"], lats_new),
                 "lon": (["lon"], lons_new),
             },

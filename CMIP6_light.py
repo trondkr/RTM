@@ -4,7 +4,8 @@ import os
 from calendar import monthrange
 from re import T
 from typing import List, Any
-from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser
+from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser, BooleanOptionalAction
+from venv import create
 from dask.distributed import Client
 from pathlib import Path
 
@@ -35,11 +36,11 @@ from numpy.typing import NDArray
 class CMIP6_light:
     def __init__(self, args):
         np.seterr(divide="ignore")
-        self.config = CMIP6_config.Config_albedo()
+        self.config = CMIP6_config.Config_albedo(create_forcing=args.create_forcing, use_gcs=args.use_gcs)
         self.config.source_id = args.source_id
         self.config.member_id = args.member_id
         self.show_table_of_info=False
-        
+
         if not self.config.use_local_CMIP6_files:
             self.config.read_cmip6_repository()
         self.cmip6_models: List[Any] = []
@@ -429,6 +430,7 @@ class CMIP6_light:
         clt = np.squeeze(extracted_ds["clt"].values)
         prw = np.squeeze(extracted_ds["prw"].values)
         tas = np.squeeze(extracted_ds["tas"].values)
+        tos = np.squeeze(extracted_ds["tos"].values)
 
         clt = self.filter_extremes(clt)
         chl = self.filter_extremes(chl)
@@ -439,6 +441,7 @@ class CMIP6_light:
         siconc = self.filter_extremes(siconc)
         sithick = self.filter_extremes(sithick)
         tas = self.filter_extremes(tas)
+        tos = self.filter_extremes(tos)
         prw = self.filter_extremes(prw)
 
         percentage_to_ratio = 1.0 / 100.0
@@ -452,10 +455,10 @@ class CMIP6_light:
 
         # Calculate scalar wind and organize the data arrays to be used for  given time-step (month-year)
         wind = np.sqrt(uas**2 + vas**2)
-
-        m = len(wind[:, 0])
-        n = len(wind[0, :])
-
+      
+        m = np.shape(wind)[0]
+        n = np.shape(wind)[1]
+       
         # Set show_table_of_info to True to print the range of data read 
         # at each timestep (for debugging purposes)
         if self.show_table_of_info:
@@ -469,6 +472,7 @@ class CMIP6_light:
                 ["", "chl (mg/m3)", "{:3.3f} to {:3.3f}".format(np.nanmin(chl)*1e6, np.nanmax(chl)*1e6)],
                 ["", "prw", "{:3.3f} to {:3.3f}".format(np.nanmin(prw), np.nanmax(prw))],
                 ["{}".format(model_object.name), "tas", "{:3.3f} to {:3.3f}".format(np.nanmin(tas), np.nanmax(tas))],
+                ["{}".format(model_object.name), "tos", "{:3.3f} to {:3.3f}".format(np.nanmin(tos), np.nanmax(tos))],
                 ["", "uas", "{:3.3f} to {:3.3f}".format(np.nanmin(uas), np.nanmax(uas))],
                 ["", "vas", "{:3.3f} to {:3.3f}".format(np.nanmin(vas), np.nanmax(vas))],
                 ["", "wind", "{:3.3f} to {:3.3f}".format(np.nanmin(wind), np.nanmax(wind))],
@@ -491,6 +495,7 @@ class CMIP6_light:
             siconc,
             sithick,
             tas,
+            tos,
             prw,
             m,
             n,
@@ -510,7 +515,7 @@ class CMIP6_light:
     ) -> (NDArray[float], NDArray[float], NDArray[float]):
         
         wavelengths = np.arange(200, 2700, 10)
-        
+      
         calc_radiation = [
             dask.delayed(self.radiation)(
                 clt[j, :],
@@ -537,10 +542,13 @@ class CMIP6_light:
 
         return direct_sw, diffuse_sw, ghi
 
-    def get_ozone_dataset(self, current_experiment_id: str) -> xr.Dataset:
+    def get_ozone_dataset(self, current_experiment_id: str, lat: np.array, lon: np.array, use_gcs: bool = False) -> xr.Dataset:
         """
         Retrieves the total ozone column dataset for a given experiment ID and regrids it 
-        to a consistent 1x1 degree dataset.
+        to a consistent 1x1 degree dataset. If you need to create your own ozone dataset, use
+        the script CMIP6_ozone.py and follow the instructions in that script. The default TOZ 
+        files are stored in the data directory and covers two scenarios SSP245 and SSP585 and the 
+        entire northern hemisphere.
 
         Parameters:
         - current_experiment_id (str): The ID of the current experiment.
@@ -549,35 +557,34 @@ class CMIP6_light:
         - xr.Dataset: The regridded total ozone column dataset.
         """
         logging.info("[CMIP6_light] Regridding ozone data to standard grid")
-        io = CMIP6_IO.CMIP6_IO()
+        io = CMIP6_IO.CMIP6_IO(use_gcs=use_gcs)
 
         toz_name = f"light/{current_experiment_id}/TOZ_{current_experiment_id}.nc"
-        toz_full = io.open_dataset_on_gs(toz_name)
+        if use_gcs:
+            toz_full = io.open_dataset_on_gs(toz_name)
+        else:
+            toz_name = f"data/TOZ_{current_experiment_id}.nc"
+            toz_full = xr.open_dataset(toz_name)
+            print("Opening local file", toz_name)
         assert isinstance(
             toz_full, xr.Dataset
         ), "[CMIP6_light] Unable to open TOZ file: {toz_name}"
 
-        toz_full = toz_full.sel(
-            time=slice(self.config.start_date, self.config.end_date)
-        ).sel(
-            lat=slice(self.config.min_lat, self.config.max_lat),
-            lon=slice(self.config.min_lon, self.config.max_lon),
-        )
+        
+       # toz_full = toz_full.sel(
+       #     time=slice(self.config.start_date, self.config.end_date)
+       # ).sel(
+       #     lat=slice(self.config.min_lat, self.config.max_lat),
+       #     lon=slice(self.config.min_lon, self.config.max_lon),
+       # )
 
         re = CMIP6_regrid.CMIP6_regrid()
-        ds_out = xe.util.grid_2d(
-            self.config.min_lon,
-            self.config.max_lon,
-            1,
-            self.config.min_lat,
-            self.config.max_lat,
-            1,
-        )
+        ds_out = io.create_grid(toz_full, toz_full, "TOZ", 0.25, lats=lat, lons=lon)
 
         toz_ds = re.regrid_variable(
             "TOZ", toz_full, ds_out, interpolation_method=self.config.interp
         )
-
+    
         return toz_ds
 
     def convert_dobson_units_to_atm_cm(self, ozone):
@@ -605,13 +612,12 @@ class CMIP6_light:
         assert np.nanmin(ozone) > 0
         return ozone
 
-    def perform_light_calculations(self, model_object, current_experiment_id):
+    def perform_light_calculations(self, model_object, current_experiment_id, use_gcs):
         io = CMIP6_IO.CMIP6_IO()
 
         times = model_object.ds_sets[model_object.current_member_id]["tos"].time
-        self.CMIP6_cesm3 = CMIP6_cesm3.CMIP6_cesm3()
+        self.CMIP6_cesm3 = CMIP6_cesm3.CMIP6_cesm3(use_gcs)
 
-        toz_ds = self.get_ozone_dataset(current_experiment_id)
         time_counter = 0
         start_at_noon = False
         
@@ -640,15 +646,22 @@ class CMIP6_light:
                 siconc,
                 sithick,
                 tas,
+                tos,
                 prw,
                 m,
                 n,
             ) = self.values_for_timestep(extracted_ds, model_object)
 
+            if time_counter == 0:
+                toz_ds = self.get_ozone_dataset(current_experiment_id, lat, lon, use_gcs)
+        
+            if lat.ndim==1:
+                lon, lat = np.meshgrid(lon, lat)
+            
             ozone = self.convert_dobson_units_to_atm_cm(
                 toz_ds["TOZ"][selected_time, :, :].values
             )
-
+        
             # num_days = monthrange(sel_time.year, sel_time.month)[1]
             for day in [15]:  # range(num_days):
                 for hour_of_day in range(0, 24, 6):
@@ -745,6 +758,7 @@ class CMIP6_light:
                             
                             # Calculate radiation calculation uses the direct_OSA to calculate the diffuse radiation
                             # Effect of albedo is added in `compute_surface_solar_for_specific_wavelength_band`
+                          
                             direct_sw, diffuse_sw, ghi = self.calculate_radiation(
                                 ctime,
                                 pv_system,
@@ -876,6 +890,12 @@ class CMIP6_light:
                                                      x=wavelengths[self.config.start_index_uvb:self.config.end_index_uvb], axis=0)) + \
                                  np.squeeze(np.trapezoid(y=diffuse_sw[self.config.start_index_uvb:self.config.end_index_uvb],
                                                      x=wavelengths[self.config.start_index_uvb:self.config.end_index_uvb], axis=0))
+                            
+                            # Remove values where sea surface temperature is not available
+                            par = np.where(~np.isnan(tos), par, np.nan)
+                            uv = np.where(~np.isnan(tos), uv, np.nan)
+                            uvb = np.where(~np.isnan(tos), uvb, np.nan)
+                            uva = np.where(~np.isnan(tos), uva, np.nan)
 
                             do_plot = False
                             if do_plot and hour_of_day == 12: # and sel_time.month in [1,2,3,4,5,6,7,8,9,10,11,12]:
@@ -977,30 +997,31 @@ class CMIP6_light:
                         time_counter += 1
 
         # Upload final results to GCS
-        for scenario in self.config.scenarios:
-            for vari in [
-                "par",
-                "ghi",
-                "uvb",
-                "uva",
-                "uv",
-                "uvi",
-                "uvb_srf",
-                "osa",
-            ]:
-                filename = self.get_filename(
-                    vari,
-                    model_object.name,
-                    model_object.current_member_id,
-                    scenario,
-                    current_experiment_id,
-                )
-                filename_gcs = filename.replace(self.config.outdir, "")
-                filename_gcs = f"{self.config.cmip6_outdir}{filename_gcs}"
-                if not os.path.exists(filename):
-                    os.makedirs(os.path.dirname(Path(filename)).parent, exist_ok=True)
-                io.upload_to_gcs(filename, fname_gcs=filename_gcs)
-                os.remove(filename)
+        if use_gcs:
+            for scenario in self.config.scenarios:
+                for vari in [
+                    "par",
+                    "ghi",
+                    "uvb",
+                    "uva",
+                    "uv",
+                    "uvi",
+                    "uvb_srf",
+                    "osa",
+                ]:
+                    filename = self.get_filename(
+                        vari,
+                        model_object.name,
+                        model_object.current_member_id,
+                        scenario,
+                        current_experiment_id,
+                    )
+                    filename_gcs = filename.replace(self.config.outdir, "")
+                    filename_gcs = f"{self.config.cmip6_outdir}{filename_gcs}"
+                    if not os.path.exists(filename):
+                        os.makedirs(os.path.dirname(Path(filename)).parent, exist_ok=True)
+                    io.upload_to_gcs(filename, fname_gcs=filename_gcs)
+                    os.remove(filename)
 
     def get_filename(
         self, vari, model_name, member_id, scenario, current_experiment_id
@@ -1014,11 +1035,15 @@ class CMIP6_light:
     def save_irradiance_to_netcdf(
         self, filename, da, vari, time_counter, time, lat, lon
     ):
+        if time_counter == 0 and os.path.exists(filename) is True:
+            print(f"Removed file {filename} for {vari}")
+            os.remove(filename)
+
         if time_counter == 0 and os.path.exists(filename) is False:
           
             cdf = netCDF4.Dataset(filename, mode="w")
             cdf.title = f"RTM calculations of {vari}"
-            cdf.description = "Created for revision 2 of Kristiansen et al. 2024 (in review)"
+            cdf.description = "Created for revision 2 of Kristiansen et al. 2025 (in review)"
 
             cdf.history = f"Created {datetime.datetime.now()}"
             cdf.link = "https://github.com/trondkr/RTM"
@@ -1069,7 +1094,7 @@ class CMIP6_light:
 
     # logging.info("[CMIP6_light] Wrote results to {}".format(result_file))
 
-    def calculate_light(self, current_experiment_id):
+    def calculate_light(self, current_experiment_id: str, use_gcs: bool=False):
         io = CMIP6_IO.CMIP6_IO()
         if self.config.use_local_CMIP6_files:
             io.organize_cmip6_netcdf_files_into_datasets(
@@ -1099,7 +1124,7 @@ class CMIP6_light:
                         model, self.config, current_experiment_id
                     )
                 if self.config.perform_light_calculations:
-                    self.perform_light_calculations(model, current_experiment_id)
+                    self.perform_light_calculations(model, current_experiment_id, use_gcs)
 
 
 def main(args):
@@ -1109,7 +1134,7 @@ def main(args):
     logging.info("[CMIP6_config] logging started")
 
     for current_experiment_id in light.config.experiment_ids:
-        light.calculate_light(current_experiment_id)
+        light.calculate_light(current_experiment_id, use_gcs=args.use_gcs)
 
     
 if __name__ == "__main__":
@@ -1134,7 +1159,27 @@ if __name__ == "__main__":
         type=str,
         required=True
     )
+    # Whether we use Google Cloud Storage for storing and reading files
+    parser.add_argument(
+        "-g",
+        "--use_gcs",
+        dest="use_gcs",
+        help="use_gcs",
+        type=bool,
+        default=False,
+        action=BooleanOptionalAction
+    )
+
+    parser.add_argument(
+        "-f",
+        "--create_forcing",
+        dest="create_forcing",
+        help="create_forcing",
+        type=bool,
+        default=False,
+        action=BooleanOptionalAction
+    )
     args = parser.parse_args()
     main(args)
 
-    logging.info("[CMIP6_light] Execution of downscaling completed")
+    logging.info("[CMIP6_light] Execution of light calculations completed")
