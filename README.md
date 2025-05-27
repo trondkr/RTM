@@ -1,9 +1,8 @@
-# cmip6-albedo
+# RTM
 
-![Build status][image-1]
-![CodeBeat][image-2]
-![CodeCov][image-3]
-
+# Google Storage 
+This code assumes that the user will be using Google Cloud Storage (GCS) to store results and to retrieve input files for running the RTM. This requires you to define the GCS credential file or path. I fnot you will get the error message "Your default credentials were not found. To set up Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information."
+ 
 ## Preparing the forcing for the RTM
 ### Extract variables and interpolate to cartesian grid
 Before you can run the Radiative Transfer Model you need to create the required files used as forcing. The model takes 11 variables as input which is interpolated values from CMIP6 models. You can create these forcing files using the script `CMIP6_light.py` and by setting the configuration to (`CMIP6_config.py`):
