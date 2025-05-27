@@ -59,7 +59,7 @@ class Config_albedo:
             self.experiment_ids = ["ssp245"]
         self.dset_dict = {}
         self.start_date = "1979-01-01"
-        self.end_date = "2099-12-16"
+        self.end_date = "1982-12-16" #"2099-12-16"
         
         if self.sensitivity_run:
             # For sensitivity runs we do 40 year periods to 
@@ -89,12 +89,12 @@ class Config_albedo:
         else:
             self.write_CMIP6_to_file = False
             
-        self.cmip6_netcdf_dir = "light"
-        self.cmip6_outdir = "light/ncfiles"
+        self.cmip6_netcdf_dir = "../results"
+        self.cmip6_outdir = "../results"
         if not self.bias_correct_ghi:
-            self.cmip6_outdir = "light/ncfiles_nobias"
+            self.cmip6_outdir = "../results/nobias"
         if self.sensitivity_run:
-            self.cmip6_outdir = "light_sensitivity"
+            self.cmip6_outdir = "../results/light_sensitivity"
         if os.path.exists(self.cmip6_outdir):
             os.makedirs(self.cmip6_outdir, exist_ok=True)
             
@@ -102,17 +102,17 @@ class Config_albedo:
         if self.write_CMIP6_to_file:
             # We want to save the entire northern hemisphere for possible use later
             # while calculations are done north of 50N
-            self.min_lat = 50
+            self.min_lat = 60
             self.start_date = "1950-01-01"
         else:
-            self.min_lat = 50
+            self.min_lat = 60
         self.max_lat = 70
         self.min_lon = 180
-        self.max_lon = 196
+        self.max_lon = 190
 
         # ESMF and Dask related
         self.interp = "bilinear"
-        self.outdir = f"/mnt/disks/actea-disk-1/{self.cmip6_outdir}"
+        #self.outdir = f"/mnt/disks/actea-disk-1/{self.cmip6_outdir}"
         self.outdir = f"{self.cmip6_netcdf_dir}"
         if os.path.exists(self.outdir):
             os.makedirs(self.outdir, exist_ok=True)
@@ -147,7 +147,7 @@ class Config_albedo:
         # These are values of reflection from the ocean surface at various wavelengths
         # These are used to calculate the ocean surface albedo.
         wl = pd.read_csv(
-            "data/Wavelength/Fresnels_refraction.csv", header=0, sep=";", decimal=","
+            "../data/Wavelength/Fresnels_refraction.csv", header=0, sep=";", decimal=","
         )
         self.wavelengths = wl["λ"].values
         self.refractive_indexes = wl["n(λ)"].values
@@ -187,7 +187,7 @@ class Config_albedo:
         # Read in the ice parameterization for how ice absorbs irradiance as a function of wavelength.
         # Based on Perovich 1996
         ice_wl = pd.read_csv(
-            "ice-absorption/sea_ice_absorption_perovich_and_govoni_interpolated.csv",
+            "../data/ice-absorption/sea_ice_absorption_perovich_and_govoni_interpolated.csv",
             header=0,
             sep=",",
             decimal=".",
@@ -223,7 +223,7 @@ class Config_albedo:
     def setup_ozone_uv_spectrum(self):
         # Data collected from Figure 4
         # http://html.rhhz.net/qxxb_en/html/20190207.htm#rhhz
-        infile = "ozone-absorption/O3_UV_absorption_edited.csv"
+        infile = "../data/ozone-absorption/O3_UV_absorption_edited.csv"
         df = pd.read_csv(infile, sep="\t")
 
         # Get values from dataframe
@@ -245,7 +245,7 @@ class Config_albedo:
         # Data exported from publication Matsuoka et al. 2007 (Table. 3)
         # Data are interpolated to a fixed wavelength grid that fits with the wavelengths of
         # Seferian et al. 2018
-        infile = "chl-absorption/Matsuoka2007-chla_wavelength_absorption.csv"
+        infile = "../data/chl-absorption/Matsuoka2007-chla_wavelength_absorption.csv"
         df = pd.read_csv(infile, sep=" ")
 
         # Get values from dataframe

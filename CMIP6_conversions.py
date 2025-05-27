@@ -9,7 +9,7 @@ def export_ice_absoprtion():
     # Perovich and Govoni 1991.
     # Data are interpolated to a fixed wavelength grid that fits with the wavelengths of
     # Seferian et al. 2018
-    infile = "ice-absorption/sea_ice_absorption_perovich_and_govoni.csv"
+    infile = "../data/ice-absorption/sea_ice_absorption_perovich_and_govoni.csv"
     df = pd.read_csv(infile)
     print(df.head())
     # Define the grid to interpolate to
@@ -23,7 +23,7 @@ def export_ice_absoprtion():
     # Store data to csv file as dataframe
     data = {"wavelength": wavelengths, "k_ice_pg": interp_k_ice}
     df_out = pd.DataFrame(data, index=wavelengths)
-    csv_filename = "ice-absorption/sea_ice_absorption_perovich_and_govoni_interpolated.csv"
+    csv_filename = "../data/ice-absorption/sea_ice_absorption_perovich_and_govoni_interpolated.csv"
     if os.path.exists(csv_filename): os.remove(csv_filename)
     df_out.to_csv(csv_filename, index=False)
 
@@ -37,7 +37,7 @@ def export_chl_absorption():
     # Data exported from publication Matsuoka et al. 2007 (Table. 3)
     # Data are interpolated to a fixed wavelength grid that fits with the wavelengths of
     # Seferian et al. 2018
-    infile = "chl-absorption/Matsuoka2007-chla_wavelength_absorption.csv"
+    infile = "../data/chl-absorption/Matsuoka2007-chla_wavelength_absorption.csv"
     df = pd.read_csv(infile,sep=" ")
     print(df)
 

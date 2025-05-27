@@ -102,7 +102,7 @@ class CMIP6_ozone():
 
     def convert_to_toz(self):
         scenario = "ssp585"
-        baseurl = "../oceanography/cmip6/ozone-absorption/"
+        baseurl = "../data/ozone-absorption/"
         ds = self.get_input4mpis_forcing(scenario, baseurl)
         self.convert_vmro3_to_toz(scenario, ds, baseurl)
 
